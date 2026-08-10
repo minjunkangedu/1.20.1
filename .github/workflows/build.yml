@@ -14,9 +14,7 @@ jobs:
         run: echo "dir=$(dirname "$(find . -name settings.gradle | head -n1)")" >> "$GITHUB_OUTPUT"
       - name: Build
         working-directory: ${{ steps.find.outputs.dir }}
-        run: |
-          gradle wrapper --gradle-version 8.14
-          ./gradlew build --no-daemon --stacktrace
+        run: gradle build --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: VoidHunt-mod-jar

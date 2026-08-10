@@ -57,7 +57,7 @@ public class VoidHuntClient implements ClientModInitializer {
         // --- AUTO-TARGET: nearest living hostile in range ---
         Box box = c.player.getBoundingBox().expand(RANGE);
         List<MobEntity> mobs = c.world.getEntitiesByClass(MobEntity.class, box,
-            e -> e.isAlive() && e != c.player && (e instanceof HostileEntity));
+            e -> e.isAlive() && (e instanceof HostileEntity));
         target = mobs.stream()
             .min(Comparator.comparingDouble(c.player::squaredDistanceTo))
             .orElse(null);

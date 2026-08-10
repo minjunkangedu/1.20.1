@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "voidhunt",
+  "version": "${version}",
+  "name": "Void Hunt · AR Shades",
+  "description": "AR 선글라스를 쓰면 가장 가까운 적을 자동 락온하고 사거리 안이면 자동 공격하는 헌팅 HUD 모드.",
+  "authors": [
+    "jeongah"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/voidhunt/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.voidhunt.VoidHunt"
+    ],
+    "client": [
+      "com.voidhunt.VoidHuntClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

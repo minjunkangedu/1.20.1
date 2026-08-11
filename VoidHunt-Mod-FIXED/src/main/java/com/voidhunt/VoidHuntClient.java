@@ -20,6 +20,8 @@ import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.projectile.ProjectileEntity;
@@ -48,6 +50,7 @@ public class VoidHuntClient implements ClientModInitializer {
     private static boolean lastH     = false;   // edge-detect H key
     private static boolean lastK     = false;   // edge-detect K key
     private static boolean lastL     = false;   // edge-detect L key (ultimate)
+    private static boolean lastG     = false;   // edge-detect G key (domain expansion)
     private static MobEntity target;
     private static MobEntity attackedTarget = null; // for kill counting
     private static int kills = 0, combo = 0, comboTimer = 0;
@@ -58,6 +61,13 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final double ULT_HEIGHT = 7.0;
     private static final double ULT_RADIUS = 24.0;
     private static final float  ULT_DMG    = 20.0f;
+
+    // ---- DOMAIN EXPANSION: 領域展開 · 기계의 세계 (MACHINE WORLD) ----
+    private static int    domainTimer = 0;
+    private static Vec3d  domainCenter = null;
+    private static final int    DOMAIN_TICKS  = 240;   // 12 seconds
+    private static final double DOMAIN_RADIUS = 16.0;  // enclosed space radius
+    private static final float  DOMAIN_DMG    = 6.0f;  // sure-hit tick damage
 
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
@@ -136,13 +146,18 @@ public class VoidHuntClient implements ClientModInitializer {
         boolean hNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_H);
         boolean kNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_K);
         boolean lNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_O);
+        boolean gNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_G);
         if (hNow && !lastH) huntMode = !huntMode;
         if (kNow && !lastK) toggleDrones(c);
         if (lNow && !lastL && shadesOn(c) && ultTimer <= 0) {  // ULTIMATE
             if (drones.size() < MAX_DRONES) spawnDrones(c);
             ultTimer = ULT_TICKS;
         }
-        lastH = hNow; lastK = kNow; lastL = lNow;
+        if (gNow && !lastG && shadesOn(c) && domainTimer <= 0 && c.player != null) {  // DOMAIN EXPANSION
+            domainTimer = DOMAIN_TICKS;
+            domainCenter = c.player.getPos();
+        }
+        lastH = hNow; lastK = kNow; lastL = lNow; lastG = gNow;
         target = null;
 
         if (c.player == null || c.world == null || c.interactionManager == null) return;
@@ -153,9 +168,10 @@ public class VoidHuntClient implements ClientModInitializer {
         }
         if (comboTimer > 0) { comboTimer--; if (comboTimer == 0) combo = 0; }
 
-        if (!shadesOn(c)) { drones.clear(); ultTimer = 0; return; }
+        if (!shadesOn(c)) { drones.clear(); ultTimer = 0; domainTimer = 0; return; }
 
         if (ultTimer > 0) tickUltimate(c);
+        if (domainTimer > 0) { tickDomain(c); domainTimer--; }
 
         // ---- AUTO-TARGET + AIM + ATTACK (only while hunt mode on) ----
         if (active(c)) {
@@ -301,6 +317,82 @@ public class VoidHuntClient implements ClientModInitializer {
         }
     }
 
+    // DOMAIN EXPANSION — builds an enclosed machine dome; every hostile inside
+    // is guaranteed-hit (sure-hit) and bound while it lasts.
+    private void tickDomain(MinecraftClient c) {
+        ClientPlayerEntity p = c.player;
+        ClientWorld w = c.world;
+        if (domainCenter == null) domainCenter = p.getPos();
+        Vec3d ctr = domainCenter;
+        double R = DOMAIN_RADIUS;
+        long t = p.age;
+        int elapsed = DOMAIN_TICKS - domainTimer;
+        double form = Math.min(1.0, elapsed / 12.0);   // 0..1 barrier-forming sweep
+        double spin = t * 0.05;
+
+        // vertical ribs (meridians) — the dome cage
+        int MER = 10, SEG = 8;
+        for (int m = 0; m < MER; m++) {
+            double theta = m * (Math.PI * 2 / MER) + spin;
+            for (int s = 0; s <= SEG; s++) {
+                double elev = (Math.PI / 2) * s / SEG * form;
+                double hr = R * Math.cos(elev);
+                w.addParticle(ParticleTypes.END_ROD,
+                    ctr.x + Math.cos(theta) * hr, ctr.y + R * Math.sin(elev), ctr.z + Math.sin(theta) * hr, 0, 0, 0);
+            }
+        }
+        // horizontal latitude rings (every other tick)
+        if ((t & 1) == 0) {
+            int LAT = 3;
+            for (int l = 1; l <= LAT; l++) {
+                double elev = (Math.PI / 2) * l / (LAT + 1) * form;
+                double hr = R * Math.cos(elev);
+                double y = ctr.y + R * Math.sin(elev);
+                for (int s = 0; s < 24; s++) {
+                    double a = s * (Math.PI * 2 / 24) - spin * 0.6;
+                    w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, ctr.x + Math.cos(a) * hr, y, ctr.z + Math.sin(a) * hr, 0, 0, 0);
+                }
+            }
+            // floor circuit-grid rings
+            for (int rr = 1; rr <= 3; rr++) {
+                double rad = R * rr / 3.0 * form;
+                for (int s = 0; s < 24; s++) {
+                    double a = s * (Math.PI * 2 / 24) + spin * 0.4;
+                    w.addParticle(ParticleTypes.ELECTRIC_SPARK, ctr.x + Math.cos(a) * rad, ctr.y + 0.05, ctr.z + Math.sin(a) * rad, 0, 0, 0);
+                }
+            }
+        }
+
+        // SURE-HIT: bind + damage every hostile trapped inside the domain
+        Box box = new Box(ctr.subtract(R, R, R), ctr.add(R, R, R));
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, box,
+            e -> e.isAlive() && (e instanceof HostileEntity) && e.getPos().distanceTo(ctr) <= R + 1.0);
+        Vec3d apex = ctr.add(0, R, 0);
+        for (MobEntity m : mobs) {
+            Vec3d mc2 = m.getBoundingBox().getCenter();
+            if ((t % 4) == 0) fireLaser(w, apex, mc2);
+            if ((t % 3) == 0) domainHit(c, m, DOMAIN_DMG);
+            w.addParticle(ParticleTypes.ELECTRIC_SPARK, mc2.x, mc2.y, mc2.z, 0, 0, 0);
+        }
+    }
+
+    // Domain sure-hit: real damage + bind (slowness/weakness) in singleplayer.
+    private void domainHit(MinecraftClient c, MobEntity mob, float amt) {
+        MinecraftServer server = c.getServer();
+        if (server == null) return;
+        UUID id = mob.getUuid();
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey());
+            if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se instanceof LivingEntity le) {
+                le.damage(sw, sw.getDamageSources().magic(), amt);
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 30, 4));
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.WEAKNESS, 30, 2));
+            }
+        });
+    }
+
     private void fireLaser(ClientWorld w, Vec3d from, Vec3d to) {
         int steps = (int) (from.distanceTo(to) * 3) + 4;
         for (int i = 0; i <= steps; i++) {
@@ -351,8 +443,68 @@ public class VoidHuntClient implements ClientModInitializer {
         int seg=Math.max(28,r*3); for(int i=0;i<seg;i++){ double a=i*2*Math.PI/seg; dot(g,cx+(int)Math.round(Math.cos(a)*r),cy+(int)Math.round(Math.sin(a)*r),col); }
     }
 
+    // ---- DOMAIN EXPANSION full-screen overlay (領域展開 · 기계의 세계) ----
+    private void drawDomainOverlay(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int W = ctx.getScaledWindowWidth();
+        int H = ctx.getScaledWindowHeight();
+        int elapsed = DOMAIN_TICKS - domainTimer;
+        long t = c.player.age;
+
+        // activation flash (cyan-white burst), first 10 ticks
+        if (elapsed < 10) {
+            int a = (int) (210 * (1 - elapsed / 10.0));
+            ctx.fill(0, 0, W, H, (a << 24) | 0x8FF6FF);
+        }
+        // cinematic letterbox + moving scanline
+        ctx.fill(0, 0, W, 22, 0x99000000);
+        ctx.fill(0, H - 22, W, H, 0x99000000);
+        int sy = (int) ((t * 5) % H);
+        hLine(ctx, 0, W, sy, 0x2241E9FF);
+
+        if (elapsed < 48) {
+            // ---- dramatic reveal: 領域展開 / 기계의 세계 ----
+            String jp = "領域展開";
+            boolean blink = (elapsed < 26) && ((t / 3) % 2 == 0);
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 48f, 0f);
+            ctx.getMatrices().scale(3.0f, 3.0f, 1f);
+            ctx.drawText(tr, Text.literal(jp), -tr.getWidth(jp) / 2, 0, blink ? 0xFFFFFFFF : CY, true);
+            ctx.getMatrices().pop();
+
+            String kr = "기 계 의  세 계";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 18f, 0f);
+            ctx.getMatrices().scale(1.7f, 1.7f, 1f);
+            ctx.drawText(tr, Text.literal(kr), -tr.getWidth(kr) / 2, 0, VIO, true);
+            ctx.getMatrices().pop();
+
+            String en = "M A C H I N E   W O R L D   ·   SURE-HIT";
+            ctx.drawText(tr, Text.literal(en), W / 2 - tr.getWidth(en) / 2, H / 2 + 14, DIM, true);
+        } else {
+            // ---- compact banner once the name has faded ----
+            String b = "領域 · 기계의 세계";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, 4f, 0f);
+            ctx.getMatrices().scale(1.3f, 1.3f, 1f);
+            ctx.drawText(tr, Text.literal(b), -tr.getWidth(b) / 2, 0, CY, true);
+            ctx.getMatrices().pop();
+        }
+
+        // remaining-time bar
+        int barW = 170, bx = W / 2 - barW / 2, by = H - 30;
+        ctx.fill(bx - 1, by - 1, bx + barW + 1, by + 4, 0xFF10202A);
+        int fillW = (int) (barW * domainTimer / (double) DOMAIN_TICKS);
+        ctx.fill(bx, by, bx + fillW, by + 3, CY);
+        String sec = (domainTimer / 20 + 1) + "s";
+        ctx.drawText(tr, Text.literal(sec), bx + barW + 6, by - 3, CY, true);
+    }
+
     private void onHud(DrawContext ctx, RenderTickCounter counter) {
         MinecraftClient c = MinecraftClient.getInstance();
+        if (c.player == null || c.world == null) return;
+        // Domain overlay renders whenever the domain is up + shades on (even in standby).
+        if (domainTimer > 0 && shadesOn(c)) drawDomainOverlay(ctx, c);
         if (!active(c)) return;
         ClientPlayerEntity p = c.player;
         TextRenderer tr = c.textRenderer;
@@ -371,6 +523,7 @@ public class VoidHuntClient implements ClientModInitializer {
         ctx.drawText(tr, Text.literal("TARGETS " + hostiles.size() + "   RANGE " + (int) RANGE + "m"), 8, 42, CY, true);
         ctx.drawText(tr, Text.literal(target != null ? "LOCK  >> LOCKED" : "LOCK  -- SEARCHING"), 8, 54, target != null ? AMB : DIM, true);
         ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)   ULT (O)"), 8, 66, drones.isEmpty() ? DIM : VIO, true);
+        ctx.drawText(tr, Text.literal(domainTimer > 0 ? "DOMAIN >> ACTIVE (G)" : "DOMAIN -- READY (G)"), 8, 78, domainTimer > 0 ? RED : DIM, true);
 
         // ---------- ULTIMATE banner ----------
         if (ultTimer > 0) {

@@ -3,19 +3,29 @@ package com.voidhunt;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.LightmapTextureManager;
+import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.RenderTickCounter;
+import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.item.ItemDisplayContext;
+import net.minecraft.item.ItemStack;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.util.math.RotationAxis;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
@@ -50,6 +60,8 @@ public class VoidHuntClient implements ClientModInitializer {
 
     private static final int CY=0xFF41E9FF, AMB=0xFFFFB638, DIM=0xFF5B7C8A, RED=0xFFFF4D6D, VIO=0xFFB98CFF;
 
+    private static final ItemStack DRONE_STACK = new ItemStack(VoidHunt.VOID_DRONE);
+
     static final class Drone {
         Vec3d pos; Vec3d goal; int side; int cd = 0;
         Drone(Vec3d p, int side){ this.pos = p; this.side = side; }
@@ -61,6 +73,30 @@ public class VoidHuntClient implements ClientModInitializer {
         // to bypass saved-binding / conflict issues entirely.
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
         HudRenderCallback.EVENT.register(this::onHud);
+        WorldRenderEvents.AFTER_ENTITIES.register(this::onWorldRender);
+    }
+
+    // Render the 3D drone model at each drone's world position.
+    private void onWorldRender(WorldRenderContext ctx) {
+        if (drones.isEmpty()) return;
+        MatrixStack ms = ctx.matrixStack();
+        if (ms == null) return;
+        VertexConsumerProvider vcp = ctx.consumers();
+        Camera cam = ctx.camera();
+        net.minecraft.util.math.Vec3d camPos = cam.getPos();
+        MinecraftClient mc = MinecraftClient.getInstance();
+        float spin = (mc.player != null ? mc.player.age : 0) * 2.0f;
+        int light = LightmapTextureManager.pack(15, 15);
+        for (Drone d : drones) {
+            ms.push();
+            ms.translate(d.pos.x - camPos.x, d.pos.y - camPos.y, d.pos.z - camPos.z);
+            ms.scale(0.8f, 0.8f, 0.8f);
+            ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(spin));
+            ms.translate(-0.5, -0.5, -0.5); // center the 1-block item model
+            mc.getItemRenderer().renderItem(DRONE_STACK, ItemDisplayContext.FIXED,
+                light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
+            ms.pop();
+        }
     }
 
     private boolean shadesOn(MinecraftClient c) {
@@ -132,14 +168,24 @@ public class VoidHuntClient implements ClientModInitializer {
         for (Drone d : drones) {
             Vec3d follow = p.getEyePos()
                 .add(p.getRotationVec(1.0f).multiply(2.0))
-                .add(d.side * 1.6, 0.7, 0.0);
-            Vec3d goal = (d.goal != null) ? d.goal.add(0.0, 1.0, 0.0) : follow;
+                .add(d.side * 1.8, 0.7, 0.0);
+            // each drone aims for a spread-out point so they don't stack
+            Vec3d spread = new Vec3d(d.side * 1.8, 0.0, 0.0);
+            Vec3d goal = (d.goal != null) ? d.goal.add(0.0, 1.0, 0.0).add(spread) : follow;
             d.pos = d.pos.add(goal.subtract(d.pos).multiply(0.15));
 
-            // drone body
-            w.addParticle(ParticleTypes.END_ROD, d.pos.x, d.pos.y, d.pos.z, 0, 0, 0);
-            if ((p.age % 4) == 0)
-                w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, d.pos.x, d.pos.y, d.pos.z, 0, 0.01, 0);
+            // separation: push apart from any other drone that is too close
+            for (Drone o : drones) {
+                if (o == d) continue;
+                Vec3d diff = d.pos.subtract(o.pos);
+                double dist = diff.length();
+                if (dist < 2.2 && dist > 0.0001)
+                    d.pos = d.pos.add(diff.normalize().multiply((2.2 - dist) * 0.5));
+            }
+
+            // small thruster spark under the drone (subtle; body is the 3D model)
+            if ((p.age % 6) == 0)
+                w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, d.pos.x, d.pos.y - 0.35, d.pos.z, 0, -0.01, 0);
 
             // nearest hostile near the drone
             Box b = new Box(d.pos.subtract(DRONE_RANGE, DRONE_RANGE, DRONE_RANGE),

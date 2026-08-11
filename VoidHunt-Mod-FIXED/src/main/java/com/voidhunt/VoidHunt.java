@@ -28,11 +28,20 @@ public class VoidHunt implements ModInitializer {
         .component(DataComponentTypes.EQUIPPABLE,
             EquippableComponent.builder(EquipmentSlot.HEAD).build()));
 
+    // Drone item — only used to render the 3D drone model in the world.
+    public static final RegistryKey<Item> DRONE_KEY =
+        RegistryKey.of(RegistryKeys.ITEM, Identifier.of(MOD_ID, "void_drone"));
+    public static final Item VOID_DRONE = new Item(new Item.Settings()
+        .registryKey(DRONE_KEY)
+        .maxCount(1)
+        .rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
+        Registry.register(Registries.ITEM, DRONE_KEY, VOID_DRONE);
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
-            .register(entries -> entries.add(VOID_SHADES));
+            .register(entries -> { entries.add(VOID_SHADES); entries.add(VOID_DRONE); });
     }
 }

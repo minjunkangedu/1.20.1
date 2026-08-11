@@ -44,11 +44,23 @@ public class VoidHunt implements ModInitializer {
         .maxCount(1)
         .rarity(Rarity.EPIC));
 
+    // Domain structures — 3D props rendered inside the Domain Expansion.
+    public static final RegistryKey<Item> GEAR_KEY =
+        RegistryKey.of(RegistryKeys.ITEM, Identifier.of(MOD_ID, "void_gear"));
+    public static final Item VOID_GEAR = new Item(new Item.Settings()
+        .registryKey(GEAR_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> CORE_KEY =
+        RegistryKey.of(RegistryKeys.ITEM, Identifier.of(MOD_ID, "void_core"));
+    public static final Item VOID_CORE = new Item(new Item.Settings()
+        .registryKey(CORE_KEY).maxCount(1).rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
         Registry.register(Registries.ITEM, DRONE_KEY, VOID_DRONE);
         Registry.register(Registries.ITEM, SAT_KEY, VOID_SATELLITE);
+        Registry.register(Registries.ITEM, GEAR_KEY, VOID_GEAR);
+        Registry.register(Registries.ITEM, CORE_KEY, VOID_CORE);
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
             .register(entries -> { entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE); });

@@ -68,6 +68,8 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final int    DOMAIN_TICKS  = 240;   // 12 seconds
     private static final double DOMAIN_RADIUS = 16.0;  // enclosed space radius
     private static final float  DOMAIN_DMG    = 6.0f;  // sure-hit tick damage
+    private static final double FREEZE_RADIUS = 320.0; // 20 chunks — everything (but caster) is frozen here
+    private static final java.util.Map<UUID, Vec3d> frozen = new java.util.HashMap<>();
 
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
@@ -83,6 +85,8 @@ public class VoidHuntClient implements ClientModInitializer {
 
     private static final ItemStack DRONE_STACK = new ItemStack(VoidHunt.VOID_DRONE);
     private static final ItemStack SAT_STACK   = new ItemStack(VoidHunt.VOID_SATELLITE);
+    private static final ItemStack GEAR_STACK  = new ItemStack(VoidHunt.VOID_GEAR);
+    private static final ItemStack CORE_STACK  = new ItemStack(VoidHunt.VOID_CORE);
 
     static final class Drone {
         Vec3d pos; Vec3d goal; int idx; int cd = 0;
@@ -100,15 +104,18 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // Render the 3D drone model at each drone's world position.
     private void onWorldRender(WorldRenderContext ctx) {
-        if (drones.isEmpty()) return;
         MatrixStack ms = ctx.matrixStack();
         if (ms == null) return;
         VertexConsumerProvider vcp = ctx.consumers();
         Camera cam = ctx.camera();
         net.minecraft.util.math.Vec3d camPos = cam.getPos();
         MinecraftClient mc = MinecraftClient.getInstance();
-        float spin = (mc.player != null ? mc.player.age : 0) * 2.0f;
+        if (mc.player == null) return;
+        float spin = mc.player.age * 2.0f;
         int light = LightmapTextureManager.pack(15, 15);
+        // DOMAIN structures (gears + central reactor core)
+        if (domainTimer > 0 && domainCenter != null)
+            renderDomain(ms, vcp, mc, camPos, light);
         for (Drone d : drones) {
             ms.push();
             ms.translate(d.pos.x - camPos.x, d.pos.y - camPos.y, d.pos.z - camPos.z);
@@ -131,6 +138,110 @@ public class VoidHuntClient implements ClientModInitializer {
                 light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
             ms.pop();
         }
+    }
+
+    // Render the machine-world structures inside the domain: a central reactor
+    // core, standing gears around the perimeter, and big gears on the floor.
+    private void renderDomain(MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc,
+                              Vec3d camPos, int light) {
+        Vec3d ctr = domainCenter;
+        float age = mc.player.age;
+        int elapsed = DOMAIN_TICKS - domainTimer;
+        float rise = Math.min(1.0f, elapsed / 14.0f);   // structures rise as domain forms
+
+        // ---- central reactor core (grand centerpiece), grows in and stands on the floor ----
+        float cScale = 2.4f * (0.25f + 0.75f * rise);
+        double coreHalf = (23.75 / 16.0) * cScale;       // half-height so the base sits on the floor
+        double cy = ctr.y + coreHalf;
+        ms.push();
+        ms.translate(ctr.x - camPos.x, cy - camPos.y, ctr.z - camPos.z);
+        ms.scale(cScale, cScale, cScale);
+        ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(age * 0.6f));
+        ms.translate(-0.5, -0.5, -0.5);
+        mc.getItemRenderer().renderItem(CORE_STACK, ModelTransformationMode.FIXED,
+            light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
+        ms.pop();
+
+        // ---- central GEAR TOWER: big concentric rings stacked up the core beam ----
+        float[] towScale = {6.0f, 5.0f, 4.2f, 3.4f, 2.6f};
+        for (int i = 0; i < towScale.length; i++) {
+            double ty = ctr.y + (5.0 + i * 4.0) * rise;
+            float sc = towScale[i] * (0.25f + 0.75f * rise);
+            renderGear(ms, vcp, mc, camPos, light, ctr.x, ty, ctr.z, sc,
+                0f, age * ((i % 2 == 0) ? 1.1f : -1.1f), false);
+        }
+
+        // ---- perimeter SPIRE TOWERS (smaller cores ring the arena like a machine city) ----
+        int TOWERS = 6;
+        for (int i = 0; i < TOWERS; i++) {
+            double a = i * (Math.PI * 2 / TOWERS) + Math.PI / TOWERS;
+            double tx = ctr.x + Math.cos(a) * (DOMAIN_RADIUS * 1.08);
+            double tz = ctr.z + Math.sin(a) * (DOMAIN_RADIUS * 1.08);
+            float sc = 1.35f * (0.25f + 0.75f * rise);
+            double th = (23.75 / 16.0) * sc;
+            ms.push();
+            ms.translate(tx - camPos.x, (ctr.y + th) - camPos.y, tz - camPos.z);
+            ms.scale(sc, sc, sc);
+            ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(age * 0.3f + i * 30));
+            ms.translate(-0.5, -0.5, -0.5);
+            mc.getItemRenderer().renderItem(CORE_STACK, ModelTransformationMode.FIXED,
+                light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
+            ms.pop();
+        }
+
+        // ---- standing gears around the perimeter (like cogs on the dome wall) ----
+        int RINGN = 8;
+        double rr = DOMAIN_RADIUS * 0.92;
+        for (int i = 0; i < RINGN; i++) {
+            double theta = i * (Math.PI * 2 / RINGN) + age * 0.01;
+            double gx = ctr.x + Math.cos(theta) * rr;
+            double gz = ctr.z + Math.sin(theta) * rr;
+            double gy = ctr.y + (2.5 + (i % 3) * 2.5) * rise;
+            float facing = (float) Math.toDegrees(theta);
+            float gspin = age * ((i % 2 == 0) ? 3.5f : -3.5f);
+            renderGear(ms, vcp, mc, camPos, light, gx, gy, gz, 2.8f, facing, gspin, true);
+        }
+
+        // ---- floating gears drifting at mid-air, varied sizes/tilt ----
+        int FLOAT = 6;
+        for (int i = 0; i < FLOAT; i++) {
+            double a = i * (Math.PI * 2 / FLOAT) + age * 0.006;
+            double fx = ctr.x + Math.cos(a) * (DOMAIN_RADIUS * 0.68);
+            double fz = ctr.z + Math.sin(a) * (DOMAIN_RADIUS * 0.68);
+            double fy = ctr.y + (7.0 + (i % 4) * 3.0) * rise
+                        + Math.sin((age * 0.03) + i) * 0.8;
+            float sc = (1.6f + (i % 3) * 0.7f);
+            renderGear(ms, vcp, mc, camPos, light, fx, fy, fz, sc,
+                (float) Math.toDegrees(a), age * ((i % 2 == 0) ? 2.2f : -2.2f), true);
+        }
+
+        // ---- big flat gears on the floor ----
+        renderGear(ms, vcp, mc, camPos, light, ctr.x, ctr.y + 0.15, ctr.z, 5.0f, 0f, age * 1.4f, false);
+        int FLOORN = 6;
+        for (int i = 0; i < FLOORN; i++) {
+            double a = i * (Math.PI * 2 / FLOORN) + Math.PI / FLOORN;
+            double fx = ctr.x + Math.cos(a) * (DOMAIN_RADIUS * 0.6);
+            double fz = ctr.z + Math.sin(a) * (DOMAIN_RADIUS * 0.6);
+            renderGear(ms, vcp, mc, camPos, light, fx, ctr.y + 0.1, fz, 2.4f,
+                0f, age * ((i % 2 == 0) ? -2.6f : 2.6f), false);
+        }
+    }
+
+    private void renderGear(MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc,
+                            Vec3d camPos, int light, double x, double y, double z,
+                            float scale, float facing, float spin, boolean upright) {
+        ms.push();
+        ms.translate(x - camPos.x, y - camPos.y, z - camPos.z);
+        ms.scale(scale, scale, scale);
+        if (upright) {
+            ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(facing));
+            ms.multiply(RotationAxis.POSITIVE_X.rotationDegrees(90));
+        }
+        ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(spin));
+        ms.translate(-0.5, -0.5, -0.5);
+        mc.getItemRenderer().renderItem(GEAR_STACK, ModelTransformationMode.FIXED,
+            light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
+        ms.pop();
     }
 
     private boolean shadesOn(MinecraftClient c) {
@@ -168,10 +279,10 @@ public class VoidHuntClient implements ClientModInitializer {
         }
         if (comboTimer > 0) { comboTimer--; if (comboTimer == 0) combo = 0; }
 
-        if (!shadesOn(c)) { drones.clear(); ultTimer = 0; domainTimer = 0; return; }
+        if (!shadesOn(c)) { drones.clear(); ultTimer = 0; domainTimer = 0; frozen.clear(); return; }
 
         if (ultTimer > 0) tickUltimate(c);
-        if (domainTimer > 0) { tickDomain(c); domainTimer--; }
+        if (domainTimer > 0) { tickDomain(c); domainTimer--; if (domainTimer == 0) frozen.clear(); }
 
         // ---- AUTO-TARGET + AIM + ATTACK (only while hunt mode on) ----
         if (active(c)) {
@@ -363,6 +474,9 @@ public class VoidHuntClient implements ClientModInitializer {
             }
         }
 
+        // FREEZE: lock every creature/player (but the caster) in place within 20 chunks
+        freezeField(c);
+
         // SURE-HIT: bind + damage every hostile trapped inside the domain
         Box box = new Box(ctr.subtract(R, R, R), ctr.add(R, R, R));
         List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, box,
@@ -374,6 +488,32 @@ public class VoidHuntClient implements ClientModInitializer {
             if ((t % 3) == 0) domainHit(c, m, DOMAIN_DMG);
             w.addParticle(ParticleTypes.ELECTRIC_SPARK, mc2.x, mc2.y, mc2.z, 0, 0, 0);
         }
+    }
+
+    // Freeze all living entities (and other players) except the caster, in a 20-chunk
+    // radius: each is held at its captured lock position. Runs on the integrated server.
+    private void freezeField(MinecraftClient c) {
+        MinecraftServer server = c.getServer();
+        if (server == null || domainCenter == null) return;
+        UUID casterId = c.player.getUuid();
+        Vec3d ctr = domainCenter;
+        double R = FREEZE_RADIUS;
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey());
+            if (sw == null) return;
+            Box b = new Box(ctr.subtract(R, R, R), ctr.add(R, R, R));
+            for (Entity e : sw.getOtherEntities(null, b)) {
+                if (!(e instanceof LivingEntity)) continue;
+                if (e.getUuid().equals(casterId)) continue;
+                Vec3d lock = frozen.computeIfAbsent(e.getUuid(), k -> e.getPos());
+                e.setVelocity(0, 0, 0);
+                e.fallDistance = 0;
+                if (e instanceof net.minecraft.server.network.ServerPlayerEntity sp)
+                    sp.requestTeleport(lock.x, lock.y, lock.z);   // forces the client to hold
+                else
+                    e.setPosition(lock.x, lock.y, lock.z);        // snaps mobs back each tick
+            }
+        });
     }
 
     // Domain sure-hit: real damage + bind (slowness/weakness) in singleplayer.

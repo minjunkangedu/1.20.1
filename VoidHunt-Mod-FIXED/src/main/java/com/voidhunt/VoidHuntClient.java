@@ -22,6 +22,7 @@ import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ModelTransformationMode;
 import net.minecraft.particle.ParticleTypes;
@@ -58,7 +59,7 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final List<Drone> drones = new ArrayList<>();
     private static final int    MAX_DRONES = 2;
     private static final double DRONE_RANGE = 14.0;
-    private static final float  DRONE_DMG   = 4.0f;
+    private static final float  DRONE_DMG   = 12.0f;  // laser damage (was 4)
 
     private static final int CY=0xFF41E9FF, AMB=0xFFFFB638, DIM=0xFF5B7C8A, RED=0xFFFF4D6D, VIO=0xFFB98CFF;
 
@@ -145,6 +146,8 @@ public class VoidHuntClient implements ClientModInitializer {
                     attackedTarget = target;
                 }
             }
+            // AUTO-AIM projectiles: home the player's arrows/projectiles onto the target
+            steerProjectiles(c);
         }
 
         // ---- DRONE COMMAND: right-click sends drones to the looked-at spot ----
@@ -158,6 +161,32 @@ public class VoidHuntClient implements ClientModInitializer {
         lastUse = useNow;
 
         tickDrones(c);
+    }
+
+    // Steer any player-fired projectiles toward the locked target so they always hit.
+    private void steerProjectiles(MinecraftClient c) {
+        if (target == null || c.player == null || c.world == null) return;
+        ClientPlayerEntity p = c.player;
+        Vec3d aim = target.getBoundingBox().getCenter();
+        List<ProjectileEntity> projs = c.world.getEntitiesByClass(ProjectileEntity.class,
+            p.getBoundingBox().expand(64.0), pr -> pr.getOwner() == p);
+        MinecraftServer server = c.getServer();
+        for (ProjectileEntity pr : projs) {
+            Vec3d dir = aim.subtract(pr.getPos());
+            if (dir.lengthSquared() < 0.5) continue;
+            double speed = Math.max(pr.getVelocity().length(), 1.2);
+            final Vec3d nv = dir.normalize().multiply(speed);
+            pr.setVelocity(nv);
+            if (server != null) {
+                final UUID id = pr.getUuid();
+                server.execute(() -> {
+                    ServerWorld sw = server.getWorld(c.world.getRegistryKey());
+                    if (sw == null) return;
+                    Entity se = sw.getEntity(id);
+                    if (se != null) se.setVelocity(nv);
+                });
+            }
+        }
     }
 
     private void toggleDrones(MinecraftClient c) {

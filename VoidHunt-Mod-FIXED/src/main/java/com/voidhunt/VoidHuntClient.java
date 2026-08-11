@@ -63,7 +63,7 @@ public class VoidHuntClient implements ClientModInitializer {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.voidhunt.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_H, "category.voidhunt"));
         droneKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.voidhunt.drone", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_1, "category.voidhunt"));
+            "key.voidhunt.drone", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_P, "category.voidhunt"));
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
         HudRenderCallback.EVENT.register(this::onHud);
     }

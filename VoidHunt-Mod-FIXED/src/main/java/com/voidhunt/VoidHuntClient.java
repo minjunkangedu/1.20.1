@@ -2,13 +2,11 @@ package com.voidhunt;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.world.ClientWorld;
@@ -33,12 +31,11 @@ import java.util.List;
 import java.util.UUID;
 
 public class VoidHuntClient implements ClientModInitializer {
-    private static KeyBinding toggleKey;   // H : hunt mode on/off
-    private static KeyBinding droneKey;     // Q : summon/recall drones
-
     private static boolean huntMode  = true;
     private static boolean aimAssist = true;
     private static boolean lastUse   = false;   // edge-detect right click
+    private static boolean lastH     = false;   // edge-detect H key
+    private static boolean lastK     = false;   // edge-detect K key
     private static MobEntity target;
 
     private static final double RANGE = 20.0;   // detection radius
@@ -60,10 +57,8 @@ public class VoidHuntClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.voidhunt.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_H, "category.voidhunt"));
-        droneKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.voidhunt.drone", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K, "category.voidhunt"));
+        // Keys are read RAW (InputUtil) instead of registered keybinds,
+        // to bypass saved-binding / conflict issues entirely.
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
         HudRenderCallback.EVENT.register(this::onHud);
     }
@@ -75,8 +70,14 @@ public class VoidHuntClient implements ClientModInitializer {
     private boolean active(MinecraftClient c) { return huntMode && shadesOn(c); }
 
     private void onTick(MinecraftClient c) {
-        while (toggleKey.wasPressed()) huntMode = !huntMode;
-        while (droneKey.wasPressed())  toggleDrones(c);
+        // RAW key reads (edge-detected) — no keybind system, no conflicts
+        long win = c.getWindow().getHandle();
+        boolean noScreen = c.currentScreen == null;
+        boolean hNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_H);
+        boolean kNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_K);
+        if (hNow && !lastH) huntMode = !huntMode;
+        if (kNow && !lastK) toggleDrones(c);
+        lastH = hNow; lastK = kNow;
         target = null;
 
         if (c.player == null || c.world == null || c.interactionManager == null) return;

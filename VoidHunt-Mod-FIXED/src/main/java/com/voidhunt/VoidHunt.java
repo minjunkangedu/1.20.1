@@ -36,12 +36,21 @@ public class VoidHunt implements ModInitializer {
         .maxCount(1)
         .rarity(Rarity.EPIC));
 
+    // Satellite item — renders the 3D orbital-strike satellite during the ultimate.
+    public static final RegistryKey<Item> SAT_KEY =
+        RegistryKey.of(RegistryKeys.ITEM, Identifier.of(MOD_ID, "void_satellite"));
+    public static final Item VOID_SATELLITE = new Item(new Item.Settings()
+        .registryKey(SAT_KEY)
+        .maxCount(1)
+        .rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
         Registry.register(Registries.ITEM, DRONE_KEY, VOID_DRONE);
+        Registry.register(Registries.ITEM, SAT_KEY, VOID_SATELLITE);
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
-            .register(entries -> { entries.add(VOID_SHADES); entries.add(VOID_DRONE); });
+            .register(entries -> { entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE); });
     }
 }

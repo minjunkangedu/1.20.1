@@ -47,9 +47,17 @@ public class VoidHuntClient implements ClientModInitializer {
     private static boolean lastUse   = false;   // edge-detect right click
     private static boolean lastH     = false;   // edge-detect H key
     private static boolean lastK     = false;   // edge-detect K key
+    private static boolean lastL     = false;   // edge-detect L key (ultimate)
     private static MobEntity target;
     private static MobEntity attackedTarget = null; // for kill counting
     private static int kills = 0, combo = 0, comboTimer = 0;
+
+    // ---- ultimate (orbital strike satellite) ----
+    private static int ultTimer = 0;
+    private static final int    ULT_TICKS  = 200;   // 10 seconds
+    private static final double ULT_HEIGHT = 7.0;
+    private static final double ULT_RADIUS = 24.0;
+    private static final float  ULT_DMG    = 20.0f;
 
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
@@ -57,17 +65,18 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // ---- drones ----
     private static final List<Drone> drones = new ArrayList<>();
-    private static final int    MAX_DRONES = 2;
+    private static final int    MAX_DRONES = 4;
     private static final double DRONE_RANGE = 14.0;
     private static final float  DRONE_DMG   = 12.0f;  // laser damage (was 4)
 
     private static final int CY=0xFF41E9FF, AMB=0xFFFFB638, DIM=0xFF5B7C8A, RED=0xFFFF4D6D, VIO=0xFFB98CFF;
 
     private static final ItemStack DRONE_STACK = new ItemStack(VoidHunt.VOID_DRONE);
+    private static final ItemStack SAT_STACK   = new ItemStack(VoidHunt.VOID_SATELLITE);
 
     static final class Drone {
-        Vec3d pos; Vec3d goal; int side; int cd = 0;
-        Drone(Vec3d p, int side){ this.pos = p; this.side = side; }
+        Vec3d pos; Vec3d goal; int idx; int cd = 0;
+        Drone(Vec3d p, int idx){ this.pos = p; this.idx = idx; }
     }
 
     @Override
@@ -100,6 +109,18 @@ public class VoidHuntClient implements ClientModInitializer {
                 light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
             ms.pop();
         }
+        // ULTIMATE satellite hovering above the player
+        if (ultTimer > 0 && mc.player != null) {
+            Vec3d sat = mc.player.getEyePos().add(0, ULT_HEIGHT, 0);
+            ms.push();
+            ms.translate(sat.x - camPos.x, sat.y - camPos.y, sat.z - camPos.z);
+            ms.scale(4.0f, 4.0f, 4.0f);
+            ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(mc.player.age * 3.0f));
+            ms.translate(-0.5, -0.5, -0.5);
+            mc.getItemRenderer().renderItem(SAT_STACK, ModelTransformationMode.FIXED,
+                light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
+            ms.pop();
+        }
     }
 
     private boolean shadesOn(MinecraftClient c) {
@@ -114,9 +135,14 @@ public class VoidHuntClient implements ClientModInitializer {
         boolean noScreen = c.currentScreen == null;
         boolean hNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_H);
         boolean kNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_K);
+        boolean lNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_L);
         if (hNow && !lastH) huntMode = !huntMode;
         if (kNow && !lastK) toggleDrones(c);
-        lastH = hNow; lastK = kNow;
+        if (lNow && !lastL && shadesOn(c) && ultTimer <= 0) {  // ULTIMATE
+            if (drones.size() < MAX_DRONES) spawnDrones(c);
+            ultTimer = ULT_TICKS;
+        }
+        lastH = hNow; lastK = kNow; lastL = lNow;
         target = null;
 
         if (c.player == null || c.world == null || c.interactionManager == null) return;
@@ -127,7 +153,9 @@ public class VoidHuntClient implements ClientModInitializer {
         }
         if (comboTimer > 0) { comboTimer--; if (comboTimer == 0) combo = 0; }
 
-        if (!shadesOn(c)) { drones.clear(); return; }
+        if (!shadesOn(c)) { drones.clear(); ultTimer = 0; return; }
+
+        if (ultTimer > 0) tickUltimate(c);
 
         // ---- AUTO-TARGET + AIM + ATTACK (only while hunt mode on) ----
         if (active(c)) {
@@ -161,6 +189,7 @@ public class VoidHuntClient implements ClientModInitializer {
         lastUse = useNow;
 
         tickDrones(c);
+        if (ultTimer > 0) ultTimer--;
     }
 
     // Steer any player-fired projectiles toward the locked target so they always hit.
@@ -189,58 +218,86 @@ public class VoidHuntClient implements ClientModInitializer {
         }
     }
 
+    private void spawnDrones(MinecraftClient c) {
+        drones.clear();
+        Vec3d base = c.player.getEyePos();
+        for (int i = 0; i < MAX_DRONES; i++) {
+            double a = i * (Math.PI * 2 / MAX_DRONES);
+            drones.add(new Drone(base.add(Math.cos(a) * 2.0, 0.6, Math.sin(a) * 2.0), i));
+        }
+    }
+
     private void toggleDrones(MinecraftClient c) {
         if (c.player == null || !shadesOn(c)) return;
-        if (drones.isEmpty()) {
-            Vec3d base = c.player.getEyePos();
-            drones.add(new Drone(base.add(-1.5, 0.6, -1.5), -1));
-            drones.add(new Drone(base.add( 1.5, 0.6, -1.5),  1));
-        } else {
-            drones.clear();
-        }
+        if (drones.isEmpty()) spawnDrones(c); else drones.clear();
     }
 
     private void tickDrones(MinecraftClient c) {
         if (drones.isEmpty()) return;
         ClientPlayerEntity p = c.player;
         ClientWorld w = c.world;
+        boolean ult = ultTimer > 0;
+        Vec3d sat = p.getEyePos().add(0, ULT_HEIGHT, 0);
+        double step = Math.PI * 2 / MAX_DRONES;
         for (Drone d : drones) {
-            Vec3d follow = p.getEyePos()
-                .add(p.getRotationVec(1.0f).multiply(2.0))
-                .add(d.side * 1.8, 0.7, 0.0);
-            // each drone aims for a spread-out point so they don't stack
-            Vec3d spread = new Vec3d(d.side * 1.8, 0.0, 0.0);
-            Vec3d goal = (d.goal != null) ? d.goal.add(0.0, 1.0, 0.0).add(spread) : follow;
-            d.pos = d.pos.add(goal.subtract(d.pos).multiply(0.15));
+            Vec3d goalPos;
+            if (ult) {                                   // orbit the satellite in a fast ring
+                double a = d.idx * step + p.age * 0.25;
+                goalPos = sat.add(Math.cos(a) * 5.0, 0, Math.sin(a) * 5.0);
+            } else if (d.goal != null) {                 // commanded position (spread around it)
+                double a = d.idx * step;
+                goalPos = d.goal.add(Math.cos(a) * 1.8, 1.0, Math.sin(a) * 1.8);
+            } else {                                     // slow orbit around the player
+                double a = d.idx * step + p.age * 0.02;
+                goalPos = p.getEyePos().add(Math.cos(a) * 2.4, 0.7, Math.sin(a) * 2.4);
+            }
+            d.pos = d.pos.add(goalPos.subtract(d.pos).multiply(ult ? 0.25 : 0.15));
 
-            // separation: push apart from any other drone that is too close
             for (Drone o : drones) {
                 if (o == d) continue;
                 Vec3d diff = d.pos.subtract(o.pos);
                 double dist = diff.length();
-                if (dist < 2.2 && dist > 0.0001)
-                    d.pos = d.pos.add(diff.normalize().multiply((2.2 - dist) * 0.5));
+                if (dist < 2.0 && dist > 0.0001)
+                    d.pos = d.pos.add(diff.normalize().multiply((2.0 - dist) * 0.5));
             }
 
-            // small thruster spark under the drone (subtle; body is the 3D model)
             if ((p.age % 6) == 0)
                 w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, d.pos.x, d.pos.y - 0.35, d.pos.z, 0, -0.01, 0);
 
-            // nearest hostile near the drone
-            Box b = new Box(d.pos.subtract(DRONE_RANGE, DRONE_RANGE, DRONE_RANGE),
-                            d.pos.add(DRONE_RANGE, DRONE_RANGE, DRONE_RANGE));
-            List<MobEntity> near = w.getEntitiesByClass(MobEntity.class, b,
-                e -> e.isAlive() && (e instanceof HostileEntity));
-            MobEntity t = near.stream()
-                .min(Comparator.comparingDouble(e -> e.squaredDistanceTo(d.pos.x, d.pos.y, d.pos.z)))
-                .orElse(null);
-
-            if (d.cd > 0) d.cd--;
-            if (t != null && d.cd <= 0) {
-                fireLaser(w, d.pos, t.getEyePos());
-                damage(c, t, DRONE_DMG);
-                d.cd = 12;
+            if (!ult) {   // normal: laser nearest hostile (ult handles its own damage)
+                Box b = new Box(d.pos.subtract(DRONE_RANGE, DRONE_RANGE, DRONE_RANGE),
+                                d.pos.add(DRONE_RANGE, DRONE_RANGE, DRONE_RANGE));
+                List<MobEntity> near = w.getEntitiesByClass(MobEntity.class, b,
+                    e -> e.isAlive() && (e instanceof HostileEntity));
+                MobEntity t = near.stream()
+                    .min(Comparator.comparingDouble(e -> e.squaredDistanceTo(d.pos.x, d.pos.y, d.pos.z)))
+                    .orElse(null);
+                if (d.cd > 0) d.cd--;
+                if (t != null && d.cd <= 0) {
+                    fireLaser(w, d.pos, t.getEyePos());
+                    damage(c, t, DRONE_DMG);
+                    d.cd = 12;
+                }
             }
+        }
+    }
+
+    // ULTIMATE: orbital-strike satellite obliterates all creatures for 10s.
+    private void tickUltimate(MinecraftClient c) {
+        ClientPlayerEntity p = c.player;
+        ClientWorld w = c.world;
+        Vec3d sat = p.getEyePos().add(0, ULT_HEIGHT, 0);
+        // vertical beam column
+        for (int i = 0; i < 30; i++) {
+            double yy = sat.y - i * 0.6;
+            w.addParticle(ParticleTypes.END_ROD,
+                p.getX() + (Math.random() - 0.5) * 0.6, yy, p.getZ() + (Math.random() - 0.5) * 0.6, 0, 0, 0);
+        }
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class,
+            p.getBoundingBox().expand(ULT_RADIUS), e -> e.isAlive() && e != p);
+        for (MobEntity m : mobs) {
+            if ((p.age % 2) == 0) fireLaser(w, sat, m.getBoundingBox().getCenter());
+            if ((p.age % 4) == 0) damage(c, m, ULT_DMG);
         }
     }
 
@@ -313,7 +370,17 @@ public class VoidHuntClient implements ClientModInitializer {
         ctx.drawText(tr, Text.literal((huntMode ? "> HUNTING" : "= STANDBY") + "   " + clock), 8, 30, huntMode ? AMB : DIM, true);
         ctx.drawText(tr, Text.literal("TARGETS " + hostiles.size() + "   RANGE " + (int) RANGE + "m"), 8, 42, CY, true);
         ctx.drawText(tr, Text.literal(target != null ? "LOCK  >> LOCKED" : "LOCK  -- SEARCHING"), 8, 54, target != null ? AMB : DIM, true);
-        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)"), 8, 66, drones.isEmpty() ? DIM : VIO, true);
+        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)   ULT (L)"), 8, 66, drones.isEmpty() ? DIM : VIO, true);
+
+        // ---------- ULTIMATE banner ----------
+        if (ultTimer > 0) {
+            String u = ">> ORBITAL STRIKE <<   " + (ultTimer / 20 + 1) + "s";
+            int uw = tr.getWidth(u);
+            ctx.fill(W / 2 - uw / 2 - 12, 82, W / 2 + uw / 2 + 12, 100, 0xAA000000);
+            hLine(ctx, W / 2 - uw / 2 - 12, W / 2 + uw / 2 + 12, 82, 0xFFFF3050);
+            hLine(ctx, W / 2 - uw / 2 - 12, W / 2 + uw / 2 + 12, 100, 0xFFFF3050);
+            ctx.drawText(tr, Text.literal(u), W / 2 - uw / 2, 87, 0xFFFF5070, true);
+        }
 
         // ---------- top-right radar ----------
         int rcx = W - 58, rcy = 60, R = 44;

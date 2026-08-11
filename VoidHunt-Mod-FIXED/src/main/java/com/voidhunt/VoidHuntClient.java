@@ -162,10 +162,14 @@ public class VoidHuntClient implements ClientModInitializer {
             light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
         ms.pop();
 
+        // ---- colossal SKY HALO gear crowning the whole arena ----
+        renderGear(ms, vcp, mc, camPos, light, ctr.x, ctr.y + 26 * rise, ctr.z,
+            11.0f * (0.3f + 0.7f * rise), 0f, age * 0.4f, false);
+
         // ---- central GEAR TOWER: big concentric rings stacked up the core beam ----
-        float[] towScale = {6.0f, 5.0f, 4.2f, 3.4f, 2.6f};
+        float[] towScale = {6.5f, 5.6f, 4.8f, 4.0f, 3.2f, 2.4f};
         for (int i = 0; i < towScale.length; i++) {
-            double ty = ctr.y + (5.0 + i * 4.0) * rise;
+            double ty = ctr.y + (4.5 + i * 3.6) * rise;
             float sc = towScale[i] * (0.25f + 0.75f * rise);
             renderGear(ms, vcp, mc, camPos, light, ctr.x, ty, ctr.z, sc,
                 0f, age * ((i % 2 == 0) ? 1.1f : -1.1f), false);
@@ -473,6 +477,51 @@ public class VoidHuntClient implements ClientModInitializer {
                 }
             }
         }
+
+        // ===== mystical layer: light pillar, rune mandala, glyphs, sky halo =====
+        // central light pillar rising to the heavens
+        for (int i = 0; i < 22; i++) {
+            double yy = ctr.y + i * 1.15 * form;
+            double jj = (Math.random() - 0.5) * 0.4;
+            w.addParticle(ParticleTypes.END_ROD, ctr.x + jj, yy, ctr.z + jj, 0, 0.02, 0);
+        }
+        w.addParticle(ParticleTypes.FIREWORK, ctr.x, ctr.y + 1 + Math.random() * 20 * form, ctr.z, 0, 0.04, 0);
+        // arcane glyphs swirling around the core
+        double gspin = t * 0.04;
+        for (int i = 0; i < 10; i++) {
+            double a = i * (Math.PI * 2 / 10) + gspin;
+            double gy = ctr.y + 3 + (i % 5) * 2.2;
+            w.addParticle(ParticleTypes.ENCHANT, ctr.x + Math.cos(a) * R * 0.4, gy, ctr.z + Math.sin(a) * R * 0.4, 0, 0, 0);
+            w.addParticle(ParticleTypes.PORTAL, ctr.x + Math.cos(-a) * R * 0.55, gy - 1, ctr.z + Math.sin(-a) * R * 0.55, 0, 0, 0);
+        }
+        if ((t & 1) == 0) {
+            double mspin = t * 0.02;
+            // big rotating rune mandala on the ground
+            for (int rr = 4; rr <= 6; rr++) {
+                double rad = R * rr / 6.0 * form;
+                for (int s = 0; s < 24; s++) {
+                    double a = s * (Math.PI * 2 / 24) - mspin;
+                    w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, ctr.x + Math.cos(a) * rad, ctr.y + 0.04, ctr.z + Math.sin(a) * rad, 0, 0, 0);
+                }
+            }
+            for (int s = 0; s < 8; s++) {
+                double a = s * (Math.PI / 4) + mspin;
+                for (double d2 = 1.5; d2 < R * form; d2 += 1.7)
+                    w.addParticle(ParticleTypes.ELECTRIC_SPARK, ctr.x + Math.cos(a) * d2, ctr.y + 0.04, ctr.z + Math.sin(a) * d2, 0, 0, 0);
+            }
+            // sky halo ring high above
+            double hy = ctr.y + 22 * form, hr = R * 1.1;
+            for (int s = 0; s < 40; s++) {
+                double a = s * (Math.PI * 2 / 40) + spin * 0.3;
+                w.addParticle(ParticleTypes.END_ROD, ctr.x + Math.cos(a) * hr, hy, ctr.z + Math.sin(a) * hr, 0, 0, 0);
+            }
+        }
+        // low violet mist for mystery
+        if ((t % 3) == 0)
+            for (int i = 0; i < 6; i++) {
+                double a = Math.random() * Math.PI * 2, d2 = Math.random() * R * form;
+                w.addParticle(ParticleTypes.DRAGON_BREATH, ctr.x + Math.cos(a) * d2, ctr.y + 0.1, ctr.z + Math.sin(a) * d2, 0, 0.004, 0);
+            }
 
         // FREEZE: lock every creature/player (but the caster) in place within 20 chunks
         freezeField(c);

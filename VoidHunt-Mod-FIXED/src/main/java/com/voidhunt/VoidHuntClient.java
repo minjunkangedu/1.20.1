@@ -47,6 +47,8 @@ public class VoidHuntClient implements ClientModInitializer {
     private static boolean lastH     = false;   // edge-detect H key
     private static boolean lastK     = false;   // edge-detect K key
     private static MobEntity target;
+    private static MobEntity attackedTarget = null; // for kill counting
+    private static int kills = 0, combo = 0, comboTimer = 0;
 
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
@@ -117,6 +119,13 @@ public class VoidHuntClient implements ClientModInitializer {
         target = null;
 
         if (c.player == null || c.world == null || c.interactionManager == null) return;
+
+        // kill tracking: a target we hit has died
+        if (attackedTarget != null && (attackedTarget.isRemoved() || !attackedTarget.isAlive())) {
+            kills++; combo++; comboTimer = 200; attackedTarget = null;
+        }
+        if (comboTimer > 0) { comboTimer--; if (comboTimer == 0) combo = 0; }
+
         if (!shadesOn(c)) { drones.clear(); return; }
 
         // ---- AUTO-TARGET + AIM + ATTACK (only while hunt mode on) ----
@@ -133,6 +142,7 @@ public class VoidHuntClient implements ClientModInitializer {
                 if (inReach && charged) {
                     c.interactionManager.attackEntity(c.player, target);
                     c.player.swingHand(Hand.MAIN_HAND);
+                    attackedTarget = target;
                 }
             }
         }
@@ -243,38 +253,105 @@ public class VoidHuntClient implements ClientModInitializer {
         p.setPitch(p.getPitch() + (wantPitch - p.getPitch()) * AIM);
     }
 
+    // ---- tiny draw helpers (DrawContext only has fill/drawText) ----
+    private static void dot(DrawContext g,int x,int y,int col){ g.fill(x,y,x+1,y+1,col); }
+    private static void hLine(DrawContext g,int x1,int x2,int y,int col){ g.fill(Math.min(x1,x2),y,Math.max(x1,x2)+1,y+1,col); }
+    private static void vLine(DrawContext g,int x,int y1,int y2,int col){ g.fill(x,Math.min(y1,y2),x+1,Math.max(y1,y2)+1,col); }
+    private static void line(DrawContext g,int x0,int y0,int x1,int y1,int col){
+        int dx=Math.abs(x1-x0), dy=Math.abs(y1-y0), sx=x0<x1?1:-1, sy=y0<y1?1:-1, err=dx-dy;
+        for(int n=0;n<400;n++){ dot(g,x0,y0,col); if(x0==x1&&y0==y1)break; int e2=2*err; if(e2>-dy){err-=dy;x0+=sx;} if(e2<dx){err+=dx;y0+=sy;} }
+    }
+    private static void ring(DrawContext g,int cx,int cy,int r,int col){
+        int seg=Math.max(28,r*3); for(int i=0;i<seg;i++){ double a=i*2*Math.PI/seg; dot(g,cx+(int)Math.round(Math.cos(a)*r),cy+(int)Math.round(Math.sin(a)*r),col); }
+    }
+
     private void onHud(DrawContext ctx, RenderTickCounter counter) {
         MinecraftClient c = MinecraftClient.getInstance();
         if (!active(c)) return;
+        ClientPlayerEntity p = c.player;
         TextRenderer tr = c.textRenderer;
         int W = ctx.getScaledWindowWidth();
         int Hh = ctx.getScaledWindowHeight();
+        long t = p.age;
 
-        ctx.drawText(tr, Text.literal(">> VOID HUNT"), 8, 8, CY, true);
-        ctx.drawText(tr, Text.literal(target != null ? "[ LOCKED ]" : "[ SEARCHING ]"),
-            8, 20, target != null ? AMB : DIM, true);
-        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)"),
-            8, 32, drones.isEmpty() ? DIM : VIO, true);
+        List<MobEntity> hostiles = c.world.getEntitiesByClass(MobEntity.class,
+            p.getBoundingBox().expand(RANGE), e -> e.isAlive() && (e instanceof HostileEntity));
 
+        // ---------- top-left system panel ----------
+        ctx.drawText(tr, Text.literal("J.A.R.V.I.S"), 8, 8, CY, true);
+        ctx.drawText(tr, Text.literal("VOID HUNT PROTOCOL"), 8, 18, DIM, true);
+        String clock = String.format("%02d:%02d", java.time.LocalTime.now().getHour(), java.time.LocalTime.now().getMinute());
+        ctx.drawText(tr, Text.literal((huntMode ? "> HUNTING" : "= STANDBY") + "   " + clock), 8, 30, huntMode ? AMB : DIM, true);
+        ctx.drawText(tr, Text.literal("TARGETS " + hostiles.size() + "   RANGE " + (int) RANGE + "m"), 8, 42, CY, true);
+        ctx.drawText(tr, Text.literal(target != null ? "LOCK  >> LOCKED" : "LOCK  -- SEARCHING"), 8, 54, target != null ? AMB : DIM, true);
+        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)"), 8, 66, drones.isEmpty() ? DIM : VIO, true);
+
+        // ---------- top-right radar ----------
+        int rcx = W - 58, rcy = 60, R = 44;
+        ctx.fill(rcx - R - 6, rcy - R - 6, rcx + R + 6, rcy + R + 6, 0x66000000);
+        ring(ctx, rcx, rcy, R, 0x8841E9FF);
+        ring(ctx, rcx, rcy, R * 2 / 3, 0x5541E9FF);
+        ring(ctx, rcx, rcy, R / 3, 0x5541E9FF);
+        hLine(ctx, rcx - R, rcx + R, rcy, 0x4441E9FF);
+        vLine(ctx, rcx, rcy - R, rcy + R, 0x4441E9FF);
+        double sweep = (t * 0.06) % (2 * Math.PI);
+        line(ctx, rcx, rcy, rcx + (int) (Math.cos(sweep) * R), rcy + (int) (Math.sin(sweep) * R), 0xAA41E9FF);
+        float yawR = (float) Math.toRadians(p.getYaw());
+        double fwx = -Math.sin(yawR), fwz = Math.cos(yawR);   // forward
+        double rgx = Math.cos(yawR),  rgz = Math.sin(yawR);   // right
+        for (MobEntity m : hostiles) {
+            double relX = m.getX() - p.getX(), relZ = m.getZ() - p.getZ();
+            double forward = relX * fwx + relZ * fwz;
+            double rightd  = relX * rgx + relZ * rgz;
+            int bx = rcx + (int) (rightd / RANGE * R);
+            int by = rcy - (int) (forward / RANGE * R);
+            int col = (target != null && m == target) ? AMB : (m.getMaxHealth() >= 40 ? RED : CY);
+            ctx.fill(bx - 1, by - 1, bx + 2, by + 2, col);
+        }
+        ctx.fill(rcx - 1, rcy - 1, rcx + 2, rcy + 2, 0xFF8FF6FF);
+
+        // ---------- center lock reticle ----------
+        int mx = W / 2, my = Hh / 2;
+        if (target != null) {
+            int L = 11, T = 2, col = AMB;
+            ctx.fill(mx - L, my - L, mx - T, my - L + 1, col); ctx.fill(mx - L, my - L, mx - L + 1, my - T, col);
+            ctx.fill(mx + T, my - L, mx + L, my - L + 1, col); ctx.fill(mx + L - 1, my - L, mx + L, my - T, col);
+            ctx.fill(mx - L, my + L - 1, mx - T, my + L, col); ctx.fill(mx - L, my + T, mx - L + 1, my + L, col);
+            ctx.fill(mx + T, my + L - 1, mx + L, my + L, col); ctx.fill(mx + L - 1, my + T, mx + L, my + L, col);
+        }
+
+        // ---------- bottom-center target card ----------
         if (target != null) {
             String nm = target.getName().getString();
             float hp = target.getHealth(), mhp = Math.max(1f, target.getMaxHealth());
-            float dist = c.player.distanceTo(target);
-            String meta = "HP " + (int) Math.ceil(hp) + "/" + (int) mhp + "   " + String.format("%.1fm", dist);
-            int tw = Math.max(tr.getWidth(nm), tr.getWidth(meta));
-            int cx = W / 2, ty = 26;
-            ctx.fill(cx - tw / 2 - 8, ty - 6, cx + tw / 2 + 8, ty + 28, 0xB0000000);
-            ctx.drawText(tr, Text.literal(nm), cx - tw / 2, ty, 0xFFFFFFFF, true);
-            ctx.drawText(tr, Text.literal(meta), cx - tw / 2, ty + 11, DIM, true);
-            int bx = cx - tw / 2, by = ty + 22, bw = tw;
+            float dist = p.distanceTo(target);
+            String threat = mhp >= 40 ? "HIGH" : (mhp >= 20 ? "MED" : "LOW");
+            boolean exec = hp / mhp <= 0.2f;
+            String meta = "DIST " + String.format("%.1fm", dist) + "  |  THREAT " + threat;
+            int tw = Math.max(96, Math.max(tr.getWidth(nm), tr.getWidth(meta)));
+            int cx = W / 2, ty = Hh - 58;
+            ctx.fill(cx - tw / 2 - 8, ty - 6, cx + tw / 2 + 8, ty + 30, 0xB0000000);
+            hLine(ctx, cx - tw / 2 - 8, cx + tw / 2 + 8, ty - 6, 0x8841E9FF);
+            ctx.drawText(tr, Text.literal(nm), cx - tr.getWidth(nm) / 2, ty, 0xFFFFFFFF, true);
+            ctx.drawText(tr, Text.literal(meta), cx - tr.getWidth(meta) / 2, ty + 11, DIM, true);
+            int bx = cx - tw / 2, by = ty + 23, bw = tw;
             ctx.fill(bx - 1, by - 1, bx + bw + 1, by + 4, 0xFF20323A);
-            ctx.fill(bx, by, bx + (int) (bw * Math.max(0f, hp / mhp)), by + 3, RED);
+            ctx.fill(bx, by, bx + (int) (bw * Math.max(0f, hp / mhp)), by + 3, exec ? 0xFFFF2040 : RED);
+            String hptxt = (int) Math.ceil(hp) + "/" + (int) mhp;
+            ctx.drawText(tr, Text.literal(hptxt), cx + tw / 2 - tr.getWidth(hptxt), by - 9, 0xFFFFFFFF, true);
+            if (exec) {
+                String ex = "!! EXECUTE";
+                ctx.drawText(tr, Text.literal(ex), cx - tr.getWidth(ex) / 2, ty - 16, 0xFFFF3050, true);
+            }
+        }
 
-            int mx = W / 2, my = Hh / 2, L = 11, T = 2;
-            ctx.fill(mx - L, my - L, mx - T, my - L + 1, AMB); ctx.fill(mx - L, my - L, mx - L + 1, my - T, AMB);
-            ctx.fill(mx + T, my - L, mx + L, my - L + 1, AMB); ctx.fill(mx + L - 1, my - L, mx + L, my - T, AMB);
-            ctx.fill(mx - L, my + L - 1, mx - T, my + L, AMB); ctx.fill(mx - L, my + T, mx - L + 1, my + L, AMB);
-            ctx.fill(mx + T, my + L - 1, mx + L, my + L, AMB); ctx.fill(mx + L - 1, my + T, mx + L, my + L, AMB);
+        // ---------- bottom-right ELIMINATED counter ----------
+        String kb = String.valueOf(kills);
+        ctx.drawText(tr, Text.literal(kb), W - 16 - tr.getWidth(kb), Hh - 40, 0xFFFFFFFF, true);
+        ctx.drawText(tr, Text.literal("ELIMINATED"), W - 16 - tr.getWidth("ELIMINATED"), Hh - 28, DIM, true);
+        if (combo > 1) {
+            String cb = "COMBO x" + combo;
+            ctx.drawText(tr, Text.literal(cb), W - 16 - tr.getWidth(cb), Hh - 52, AMB, true);
         }
     }
 }

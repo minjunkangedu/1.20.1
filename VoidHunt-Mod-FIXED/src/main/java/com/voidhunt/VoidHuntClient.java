@@ -22,8 +22,8 @@ import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.item.ItemDisplayContext;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.ModelTransformationMode;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.util.math.RotationAxis;
 import net.minecraft.server.MinecraftServer;
@@ -93,7 +93,7 @@ public class VoidHuntClient implements ClientModInitializer {
             ms.scale(0.8f, 0.8f, 0.8f);
             ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(spin));
             ms.translate(-0.5, -0.5, -0.5); // center the 1-block item model
-            mc.getItemRenderer().renderItem(DRONE_STACK, ItemDisplayContext.FIXED,
+            mc.getItemRenderer().renderItem(DRONE_STACK, ModelTransformationMode.FIXED,
                 light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
             ms.pop();
         }

@@ -67,7 +67,7 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final List<Drone> drones = new ArrayList<>();
     private static final int    MAX_DRONES = 4;
     private static final double DRONE_RANGE = 14.0;
-    private static final float  DRONE_DMG   = 12.0f;  // laser damage (was 4)
+    private static final float  DRONE_DMG   = 20.0f;  // laser damage (was 4)
 
     private static final int CY=0xFF41E9FF, AMB=0xFFFFB638, DIM=0xFF5B7C8A, RED=0xFFFF4D6D, VIO=0xFFB98CFF;
 
@@ -135,7 +135,7 @@ public class VoidHuntClient implements ClientModInitializer {
         boolean noScreen = c.currentScreen == null;
         boolean hNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_H);
         boolean kNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_K);
-        boolean lNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_L);
+        boolean lNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_O);
         if (hNow && !lastH) huntMode = !huntMode;
         if (kNow && !lastK) toggleDrones(c);
         if (lNow && !lastL && shadesOn(c) && ultTimer <= 0) {  // ULTIMATE
@@ -370,7 +370,7 @@ public class VoidHuntClient implements ClientModInitializer {
         ctx.drawText(tr, Text.literal((huntMode ? "> HUNTING" : "= STANDBY") + "   " + clock), 8, 30, huntMode ? AMB : DIM, true);
         ctx.drawText(tr, Text.literal("TARGETS " + hostiles.size() + "   RANGE " + (int) RANGE + "m"), 8, 42, CY, true);
         ctx.drawText(tr, Text.literal(target != null ? "LOCK  >> LOCKED" : "LOCK  -- SEARCHING"), 8, 54, target != null ? AMB : DIM, true);
-        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)   ULT (L)"), 8, 66, drones.isEmpty() ? DIM : VIO, true);
+        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)   ULT (O)"), 8, 66, drones.isEmpty() ? DIM : VIO, true);
 
         // ---------- ULTIMATE banner ----------
         if (ultTimer > 0) {

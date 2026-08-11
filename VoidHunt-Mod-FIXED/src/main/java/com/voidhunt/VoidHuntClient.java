@@ -63,7 +63,7 @@ public class VoidHuntClient implements ClientModInitializer {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.voidhunt.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_H, "category.voidhunt"));
         droneKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.voidhunt.drone", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_P, "category.voidhunt"));
+            "key.voidhunt.drone", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K, "category.voidhunt"));
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
         HudRenderCallback.EVENT.register(this::onHud);
     }
@@ -206,7 +206,7 @@ public class VoidHuntClient implements ClientModInitializer {
         ctx.drawText(tr, Text.literal(">> VOID HUNT"), 8, 8, CY, true);
         ctx.drawText(tr, Text.literal(target != null ? "[ LOCKED ]" : "[ SEARCHING ]"),
             8, 20, target != null ? AMB : DIM, true);
-        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (Q)"),
+        ctx.drawText(tr, Text.literal("DRONES " + drones.size() + "/" + MAX_DRONES + "  (K)"),
             8, 32, drones.isEmpty() ? DIM : VIO, true);
 
         if (target != null) {

@@ -294,7 +294,7 @@ public class VoidHuntClient implements ClientModInitializer {
                 p.getX() + (Math.random() - 0.5) * 0.6, yy, p.getZ() + (Math.random() - 0.5) * 0.6, 0, 0, 0);
         }
         List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class,
-            p.getBoundingBox().expand(ULT_RADIUS), e -> e.isAlive() && e != p);
+            p.getBoundingBox().expand(ULT_RADIUS), e -> e.isAlive());
         for (MobEntity m : mobs) {
             if ((p.age % 2) == 0) fireLaser(w, sat, m.getBoundingBox().getCenter());
             if ((p.age % 4) == 0) damage(c, m, ULT_DMG);

@@ -640,6 +640,26 @@ public class VoidHuntClient implements ClientModInitializer {
         int elapsed = DOMAIN_TICKS - domainTimer;
         long t = c.player.age;
 
+        // ===== VOID DARKNESS: everything outside the domain sinks into black =====
+        float dk = Math.min(1f, elapsed / 16f);              // darkness forms with the domain
+        if (domainTimer < 20) dk *= domainTimer / 20f;       // eases out as it ends
+        // faint deep-navy void tint over the whole view
+        ctx.fill(0, 0, W, H, ((int) (70 * dk) << 24) | 0x0A0E1E);
+        // radial vignette: nested dark frames, strong at the edges, clear in the center
+        int N = 64;
+        int maxIn = Math.min(W, H) * 3 / 5;
+        int band = Math.max(1, maxIn / N) + 1;
+        for (int i = 0; i < N; i++) {
+            int inset = i * maxIn / N;
+            int a = (int) (225 * dk * Math.pow(1 - (double) i / N, 2.3));
+            if (a <= 2) continue;
+            int col = (a << 24) | 0x02040A;                  // near-black, faint blue
+            ctx.fill(inset, inset, W - inset, inset + band, col);            // top
+            ctx.fill(inset, H - inset - band, W - inset, H - inset, col);    // bottom
+            ctx.fill(inset, inset, inset + band, H - inset, col);            // left
+            ctx.fill(W - inset - band, inset, W - inset, H - inset, col);    // right
+        }
+
         // activation flash (cyan-white burst), first 10 ticks
         if (elapsed < 10) {
             int a = (int) (210 * (1 - elapsed / 10.0));

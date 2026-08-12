@@ -29,6 +29,7 @@ import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.item.ModelTransformationMode;
 import net.minecraft.particle.DustParticleEffect;
 import net.minecraft.particle.ParticleTypes;
@@ -102,6 +103,19 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final int    ARENA_TICKS  = 400;   // 20 seconds
     private static final double ARENA_RADIUS = 18.0;
     private static final int GLD = 0xFFF2C044, CRM = 0xFFE23C46;
+    private static LivingEntity opponentEntity = null;
+    // sword skills: 광폭화 / 혈검술 / 전사의 심판
+    private static boolean lastZ = false, lastN = false;
+    private static int berserkTimer = 0;
+    private static final int BERSERK_TICKS = 240;   // 12s frenzy
+    private static int   slashTimer = 0;
+    private static Vec3d slashPos = null, slashDir = null;
+    private static final int SLASH_TICKS = 16;
+    private static final float SLASH_DMG = 30.0f;
+    private static int    judgmentTimer = 0;
+    private static boolean judgmentDone = false;
+    private static Vec3d  judgmentPos = null;
+    private static final int JUDGE_TICKS = 50;
 
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
@@ -128,6 +142,7 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final ItemStack SPIKE_STACK   = new ItemStack(VoidHunt.SKULL_SPIKE);
     private static final ItemStack PILLAR_STACK  = new ItemStack(VoidHunt.ARENA_PILLAR);
     private static final ItemStack ARCH_STACK    = new ItemStack(VoidHunt.ARENA_ARCH);
+    private static final ItemStack HAND_STACK    = new ItemStack(VoidHunt.GOD_HAND);
 
     static final class Drone {
         Vec3d pos; Vec3d goal; int idx; int cd = 0;
@@ -167,6 +182,14 @@ public class VoidHuntClient implements ClientModInitializer {
         // DUEL ARENA colosseum
         if (arenaTimer > 0 && arenaCenter != null)
             renderArena(ms, vcp, mc, camPos, light);
+        // 전사의 심판 — the giant God-Warrior hand descends onto the doomed foe
+        if (judgmentTimer > 0 && judgmentPos != null) {
+            int el = JUDGE_TICKS - judgmentTimer;
+            float prog = Math.min(1f, el / 22f);
+            double startY = judgmentPos.y + 30;
+            double curY = startY - (startY - (judgmentPos.y + 2.5)) * prog;
+            renderModel(HAND_STACK, ms, vcp, mc, camPos, light, judgmentPos.x, curY, judgmentPos.z, 6.0f, 0f, 0f, false);
+        }
         for (Crow cw : crows) {
             renderModel(CROW_STACK, ms, vcp, mc, camPos, light, cw.pos.x, cw.pos.y, cw.pos.z,
                 0.9f, (float) cw.face, 0f, false);
@@ -340,8 +363,8 @@ public class VoidHuntClient implements ClientModInitializer {
         boolean lNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_O);
         boolean gNow = noScreen && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_G);
         if (hNow && !lastH) huntMode = !huntMode;
-        if (kNow && !lastK) toggleDrones(c);
-        if (lNow && !lastL && shadesOn(c) && ultTimer <= 0) {  // ULTIMATE
+        if (kNow && !lastK && arenaTimer <= 0) toggleDrones(c);   // no summons inside the arena
+        if (lNow && !lastL && shadesOn(c) && ultTimer <= 0 && arenaTimer <= 0) {  // ULTIMATE
             if (drones.size() < MAX_DRONES) spawnDrones(c);
             ultTimer = ULT_TICKS;
         }
@@ -676,7 +699,7 @@ public class VoidHuntClient implements ClientModInitializer {
         boolean vNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_V);
         boolean xNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_X);
         if (rNow && !lastR && crowDomainTimer <= 0) { crowDomainTimer = CROW_DOMAIN_TICKS; crowCenter = c.player.getPos(); }
-        if (cNow && !lastC) summonCrows(c);
+        if (cNow && !lastC && arenaTimer <= 0) summonCrows(c);   // no summons inside the arena
         if (vNow && !lastV && wingsTimer <= 0) activateWings(c);
         if (xNow && !lastX && sealTimer <= 0) startSeal(c);
         lastR = rNow; lastC = cNow; lastV = vNow; lastX = xNow;
@@ -937,16 +960,39 @@ public class VoidHuntClient implements ClientModInitializer {
         long win = c.getWindow().getHandle();
         boolean ns = c.currentScreen == null;
         boolean bNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_B);
+        boolean zNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_Z);
+        boolean nNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_N);
         if (bNow && !lastB && arenaTimer <= 0) startArena(c);
-        lastB = bNow;
-        if (arenaTimer > 0) { tickArena(c); arenaTimer--; if (arenaTimer == 0) opponentId = null; }
+        if (zNow && !lastZ && berserkTimer <= 0) startBerserk(c);
+        if (nNow && !lastN && slashTimer <= 0) bloodSlash(c);
+        lastB = bNow; lastZ = zNow; lastN = nNow;
+        if (arenaTimer > 0) {
+            tickArena(c);
+            if (arenaTimer > 0) { arenaTimer--; if (arenaTimer == 0) endArena(); }
+        }
+        if (berserkTimer > 0) { tickBerserk(c); berserkTimer--; }
+        if (slashTimer > 0) { tickSlash(c); slashTimer--; }
+        if (judgmentTimer > 0) { tickJudgment(c); judgmentTimer--; }
     }
 
     private void startArena(MinecraftClient c) {
         arenaCenter = c.player.getPos();
         arenaTimer = ARENA_TICKS;
+        judgmentDone = false;
+        drones.clear(); crows.clear();          // existing summons are banished
         opponentId = pickOpponent(c);
         buffCaster(c);
+        costHealthFraction(c, 0.15f);           // the caster pays 15% of their blood
+    }
+    private void costHealthFraction(MinecraftClient c, float frac) {
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = c.player.getUuid();
+        server.execute(() -> {
+            var sp = server.getPlayerManager().getPlayer(id);
+            if (sp != null) sp.setHealth(Math.max(1.0f, sp.getHealth() - sp.getMaxHealth() * frac));
+        });
+    }
+    private void endArena() {
+        arenaTimer = 0; opponentId = null; opponentEntity = null;
     }
 
     private UUID pickOpponent(MinecraftClient c) {
@@ -956,6 +1002,7 @@ public class VoidHuntClient implements ClientModInitializer {
         LivingEntity best = null; double bd = 1e9;
         for (LivingEntity e : near) if (e instanceof PlayerEntity) { double d = e.squaredDistanceTo(c.player); if (d < bd) { bd = d; best = e; } }
         if (best == null) { bd = 1e9; for (LivingEntity e : near) { double d = e.squaredDistanceTo(c.player); if (d < bd) { bd = d; best = e; } } }
+        opponentEntity = best;
         if (best != null) { opponentName = best.getName().getString(); return best.getUuid(); }
         opponentName = "—"; return null;
     }
@@ -971,6 +1018,18 @@ public class VoidHuntClient implements ClientModInitializer {
         ClientPlayerEntity p = c.player; ClientWorld w = c.world;
         Vec3d ctr = arenaCenter; double R = ARENA_RADIUS; long t = p.age;
         int elapsed = ARENA_TICKS - arenaTimer; double form = Math.min(1.0, elapsed / 16.0); double spin = t * 0.02;
+
+        // the duel ends the instant the chosen foe falls — only then may anyone leave
+        if (elapsed > 6 && (opponentEntity == null || !opponentEntity.isAlive() || opponentEntity.isRemoved())) {
+            endArena(); return;
+        }
+        // the caster is bound inside too — an invisible wall holds them in the ring
+        double pdx = p.getX() - ctr.x, pdz = p.getZ() - ctr.z, pd = Math.sqrt(pdx * pdx + pdz * pdz);
+        if (pd > R * 0.94 && pd > 0.01) {
+            double f = R * 0.9 / pd;
+            p.setPosition(ctr.x + pdx * f, p.getY(), ctr.z + pdz * f);
+            Vec3d v = p.getVelocity(); p.setVelocity(v.x * 0.1, v.y, v.z * 0.1);
+        }
         // glowing boundary wall of flame (rising as the arena forms)
         int seg = 60;
         for (int s = 0; s < seg; s++) {
@@ -990,6 +1049,20 @@ public class VoidHuntClient implements ClientModInitializer {
             }
         if ((t % 40) == 0) buffCaster(c);
         arenaField(c);
+
+        // 전사의 심판 — if the foe wields a ranged weapon, the God-Warrior's hand judges them
+        if (!judgmentDone && opponentEntity != null && opponentEntity.isAlive() && isRanged(opponentEntity)) {
+            judgmentDone = true;
+            judgmentTimer = JUDGE_TICKS;
+            judgmentPos = opponentEntity.getPos();
+            instakillOpponent(c);
+        }
+    }
+
+    private boolean isRanged(LivingEntity e) {
+        ItemStack m = e.getMainHandStack(), o = e.getOffHandStack();
+        return m.isOf(Items.BOW) || m.isOf(Items.CROSSBOW) || m.isOf(Items.TRIDENT)
+            || o.isOf(Items.BOW) || o.isOf(Items.CROSSBOW) || o.isOf(Items.TRIDENT);
     }
 
     // server side: keep the chosen foe in & weakened, hurl everyone else out
@@ -1038,6 +1111,92 @@ public class VoidHuntClient implements ClientModInitializer {
             double ax = ctr.x + Math.cos(a) * ARENA_RADIUS * 1.04, az = ctr.z + Math.sin(a) * ARENA_RADIUS * 1.04;
             renderModel(ARCH_STACK, ms, vcp, mc, camPos, light, ax, ctr.y + alift, az, as, (float) Math.toDegrees(a) + 90, 0f, false);
         }
+    }
+
+    // ---- 광폭화 (Berserk) : frenzy self-buff ----
+    private void startBerserk(MinecraftClient c) {
+        berserkTimer = BERSERK_TICKS;
+        playerEffect(c, StatusEffects.STRENGTH, BERSERK_TICKS, 2);
+        playerEffect(c, StatusEffects.SPEED, BERSERK_TICKS, 1);
+        playerEffect(c, StatusEffects.HASTE, BERSERK_TICKS, 2);
+        playerEffect(c, StatusEffects.RESISTANCE, BERSERK_TICKS, 0);
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        DustParticleEffect red = new DustParticleEffect(0xC81020, 1.6f);
+        for (int i = 0; i < 44; i++)
+            w.addParticle(red, p.getX() + (Math.random() - 0.5) * 1.8, p.getY() + Math.random() * 2.2, p.getZ() + (Math.random() - 0.5) * 1.8, 0, 0.02, 0);
+    }
+    private void tickBerserk(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; long t = p.age;
+        if ((t % 40) == 0) {
+            playerEffect(c, StatusEffects.STRENGTH, 60, 2);
+            playerEffect(c, StatusEffects.SPEED, 60, 1);
+            playerEffect(c, StatusEffects.HASTE, 60, 2);
+        }
+        DustParticleEffect red = new DustParticleEffect(0xC81020, 1.4f);
+        double a = t * 0.4;
+        for (int i = 0; i < 3; i++) {
+            double an = a + i * 2.1;
+            w.addParticle(red, p.getX() + Math.cos(an) * 0.9, p.getY() + 0.2 + i * 0.6, p.getZ() + Math.sin(an) * 0.9, 0, 0.01, 0);
+        }
+        if ((t % 3) == 0) w.addParticle(ParticleTypes.FLAME, p.getX() + (Math.random() - 0.5), p.getY() + Math.random() * 2, p.getZ() + (Math.random() - 0.5), 0, 0.01, 0);
+    }
+
+    // ---- 혈검술 (Blood Blade) : spend your own blood to hurl a devastating slash ----
+    private void bloodSlash(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        slashTimer = SLASH_TICKS;
+        slashPos = p.getEyePos(); slashDir = p.getRotationVec(1.0f);
+        costHealth(c, 4.0f);                       // 2 hearts of your own blood
+        Vec3d eye = slashPos, look = slashDir;
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, p.getBoundingBox().expand(11), e -> e.isAlive());
+        for (MobEntity m : mobs) {
+            Vec3d to = m.getBoundingBox().getCenter().subtract(eye);
+            if (to.lengthSquared() > 121) continue;
+            if (to.normalize().dotProduct(look) < 0.55) continue;   // in the forward arc
+            damage(c, m, SLASH_DMG);
+        }
+    }
+    private void costHealth(MinecraftClient c, float amt) {
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = c.player.getUuid();
+        server.execute(() -> {
+            var sp = server.getPlayerManager().getPlayer(id);
+            if (sp != null) sp.setHealth(Math.max(1.0f, sp.getHealth() - amt));
+        });
+    }
+    private void tickSlash(MinecraftClient c) {
+        if (slashPos == null || slashDir == null) return; ClientWorld w = c.world;
+        int el = SLASH_TICKS - slashTimer; double travel = el * 1.1;
+        Vec3d center = slashPos.add(slashDir.multiply(travel));
+        Vec3d right = slashDir.crossProduct(new Vec3d(0, 1, 0)).normalize();
+        Vec3d u2 = right.crossProduct(slashDir).normalize();
+        DustParticleEffect blood = new DustParticleEffect(0xB00818, 1.8f);
+        for (int i = -8; i <= 8; i++) {
+            double a = i / 8.0 * (Math.PI * 0.6);
+            Vec3d off = right.multiply(Math.sin(a) * 3.2).add(u2.multiply(Math.cos(a) * 3.2 - 3.2));
+            Vec3d pnt = center.add(off);
+            w.addParticle(blood, pnt.x, pnt.y, pnt.z, 0, 0, 0);
+            if ((i & 1) == 0) w.addParticle(ParticleTypes.CRIT, pnt.x, pnt.y, pnt.z, 0, 0, 0);
+        }
+    }
+
+    // ---- 전사의 심판 : the God-Warrior's hand crushes a ranged coward ----
+    private void instakillOpponent(MinecraftClient c) {
+        MinecraftServer server = c.getServer(); if (server == null || opponentId == null) return; UUID id = opponentId;
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se instanceof LivingEntity le) le.damage(sw, sw.getDamageSources().magic(), 100000f);
+        });
+    }
+    private void tickJudgment(MinecraftClient c) {
+        if (judgmentPos == null) return; ClientWorld w = c.world; Vec3d pos = judgmentPos;
+        for (int i = 0; i < 12; i++) {
+            double a = Math.random() * Math.PI * 2, r = Math.random() * 4;
+            w.addParticle(ParticleTypes.LARGE_SMOKE, pos.x + Math.cos(a) * r, pos.y + 0.2, pos.z + Math.sin(a) * r, 0, 0.02, 0);
+        }
+        DustParticleEffect blood = new DustParticleEffect(0xB00818, 2.0f);
+        for (int i = 0; i < 8; i++)
+            w.addParticle(blood, pos.x + (Math.random() - 0.5) * 2, pos.y + Math.random() * 3, pos.z + (Math.random() - 0.5) * 2, 0, 0, 0);
     }
 
     private boolean heldSword(MinecraftClient c) {
@@ -1320,8 +1479,8 @@ public class VoidHuntClient implements ClientModInitializer {
         // versus line + buff/debuff readout
         String vs = "VS  " + opponentName;
         ctx.drawText(tr, Text.literal(vs), W / 2 - tr.getWidth(vs) / 2, H / 2 + 30, 0xFFFFFFFF, true);
-        String me = "나 : 힘▲ 속도▲ 채굴▲ 방어▲";
-        String foe = "상대 : 나약함▼ 둔화▼";
+        String me = "나 : 힘+ 속도+ 채굴+ 방어+";
+        String foe = "상대 : 나약함- 둔화-";
         ctx.drawText(tr, Text.literal(me), 10, H - 44, GLD, true);
         ctx.drawText(tr, Text.literal(foe), W - 10 - tr.getWidth(foe), H - 44, CRM, true);
 
@@ -1336,11 +1495,57 @@ public class VoidHuntClient implements ClientModInitializer {
     private void drawSwordPanel(DrawContext ctx, MinecraftClient c) {
         TextRenderer tr = c.textRenderer;
         int H = ctx.getScaledWindowHeight();
-        int y0 = H - 96;
+        int y0 = H - 120;
         ctx.drawText(tr, Text.literal("DUEL BLADE · 결투장의 대검"), 8, y0, GLD, true);
-        ctx.drawText(tr, Text.literal(arenaTimer > 0 ? ">> 결투장 ACTIVE " + (arenaTimer / 20 + 1) + "s" : "= 전사들의 결투장 (B)"),
+        ctx.drawText(tr, Text.literal(arenaTimer > 0 ? ">> 결투장 " + (arenaTimer / 20 + 1) + "s  VS " + opponentName : "= 전사들의 결투장 (B)"),
             8, y0 + 12, arenaTimer > 0 ? CRM : DIM, true);
-        if (arenaTimer > 0) ctx.drawText(tr, Text.literal("VS " + opponentName), 8, y0 + 22, 0xFFFFFFFF, true);
+        ctx.drawText(tr, Text.literal(berserkTimer > 0 ? ">> 광폭화 " + (berserkTimer / 20 + 1) + "s" : "= 광폭화 (Z)"),
+            8, y0 + 22, berserkTimer > 0 ? CRM : DIM, true);
+        ctx.drawText(tr, Text.literal("혈검술 (N)  — 피를 깎아 참격"), 8, y0 + 32, slashTimer > 0 ? CRM : DIM, true);
+        ctx.drawText(tr, Text.literal("전사의 심판 — 원거리 상대 즉사"), 8, y0 + 42, judgmentTimer > 0 ? CRM : DIM, true);
+    }
+
+    // full-screen effects for the sword skills (berserk aura, judgment banner)
+    private void drawSwordFx(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int W = ctx.getScaledWindowWidth(), H = ctx.getScaledWindowHeight();
+        long t = c.player.age;
+        if (berserkTimer > 0) {
+            double beat = 0.55 + 0.45 * Math.sin(t * 0.3);
+            double fade = Math.min(1.0, berserkTimer / 20.0);
+            int N = 42, maxIn = Math.min(W, H) / 2, band = Math.max(1, maxIn / N) + 1;
+            for (int i = 0; i < N; i++) {
+                int inset = i * maxIn / N;
+                int a = (int) (95 * fade * beat * Math.pow(1 - (double) i / N, 2.4));
+                if (a <= 2) continue;
+                int col = (a << 24) | 0x8A0410;
+                ctx.fill(inset, inset, W - inset, inset + band, col);
+                ctx.fill(inset, H - inset - band, W - inset, H - inset, col);
+                ctx.fill(inset, inset, inset + band, H - inset, col);
+                ctx.fill(W - inset - band, inset, W - inset, H - inset, col);
+            }
+            String bz = "光 · 광폭화 BERSERK";
+            ctx.drawText(tr, Text.literal(bz), W / 2 - tr.getWidth(bz) / 2, 30, CRM, true);
+        }
+        if (judgmentTimer > 0) {
+            int a = (int) (140 * Math.min(1.0, judgmentTimer / 12.0));
+            ctx.fill(0, 0, W, H, (a << 24) | 0x2A0006);
+            String jp = "戦士の審判";
+            boolean blink = ((t / 2) % 2 == 0);
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 46f, 0f);
+            ctx.getMatrices().scale(3.4f, 3.4f, 1f);
+            ctx.drawText(tr, Text.literal(jp), -tr.getWidth(jp) / 2, 0, blink ? 0xFFFFFFFF : CRM, true);
+            ctx.getMatrices().pop();
+            String kr = "전사의 심판";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 12f, 0f);
+            ctx.getMatrices().scale(2.0f, 2.0f, 1f);
+            ctx.drawText(tr, Text.literal(kr), -tr.getWidth(kr) / 2, 0, GLD, true);
+            ctx.getMatrices().pop();
+            String en = "W A R R I O R ' S   J U D G M E N T   ·   즉사";
+            ctx.drawText(tr, Text.literal(en), W / 2 - tr.getWidth(en) / 2, H / 2 + 18, BON, true);
+        }
     }
 
     private void onHud(DrawContext ctx, RenderTickCounter counter) {
@@ -1353,7 +1558,7 @@ public class VoidHuntClient implements ClientModInitializer {
         if (heldFan(c)) drawFanPanel(ctx, c);
         // Duel arena overlay + sword HUD render whenever the greatsword is held.
         if (arenaTimer > 0 && heldSword(c)) drawArenaOverlay(ctx, c);
-        if (heldSword(c)) drawSwordPanel(ctx, c);
+        if (heldSword(c)) { drawSwordPanel(ctx, c); drawSwordFx(ctx, c); }
         if (!active(c)) return;
         ClientPlayerEntity p = c.player;
         TextRenderer tr = c.textRenderer;

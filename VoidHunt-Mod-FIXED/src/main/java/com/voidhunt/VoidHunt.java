@@ -83,6 +83,8 @@ public class VoidHunt implements ModInitializer {
     public static final Item ARENA_PILLAR = new Item(new Item.Settings().registryKey(APILLAR_KEY).maxCount(1).rarity(Rarity.EPIC));
     public static final RegistryKey<Item> AARCH_KEY = ck("arena_arch");
     public static final Item ARENA_ARCH = new Item(new Item.Settings().registryKey(AARCH_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> HAND_KEY = ck("god_hand");
+    public static final Item GOD_HAND = new Item(new Item.Settings().registryKey(HAND_KEY).maxCount(1).rarity(Rarity.EPIC));
 
     @Override
     public void onInitialize() {
@@ -102,6 +104,7 @@ public class VoidHunt implements ModInitializer {
         Registry.register(Registries.ITEM, SWORD_KEY, DUEL_SWORD);
         Registry.register(Registries.ITEM, APILLAR_KEY, ARENA_PILLAR);
         Registry.register(Registries.ITEM, AARCH_KEY, ARENA_ARCH);
+        Registry.register(Registries.ITEM, HAND_KEY, GOD_HAND);
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
             .register(entries -> {

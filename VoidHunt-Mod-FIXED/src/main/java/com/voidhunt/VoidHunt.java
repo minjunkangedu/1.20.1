@@ -54,6 +54,28 @@ public class VoidHunt implements ModInitializer {
     public static final Item VOID_CORE = new Item(new Item.Settings()
         .registryKey(CORE_KEY).maxCount(1).rarity(Rarity.EPIC));
 
+    // ===== CROW GRAVE set — the Crow Fan weapon + its summonable structures =====
+    private static RegistryKey<Item> ck(String id) {
+        return RegistryKey.of(RegistryKeys.ITEM, Identifier.of(MOD_ID, id));
+    }
+    public static final RegistryKey<Item> FAN_KEY  = ck("crow_fan");
+    public static final Item CROW_FAN = new Item(new Item.Settings()
+        .registryKey(FAN_KEY).maxCount(1).rarity(Rarity.EPIC));   // the held weapon
+    public static final RegistryKey<Item> CROW_KEY = ck("crow");
+    public static final Item CROW = new Item(new Item.Settings().registryKey(CROW_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> TOMB_KEY = ck("tombstone");
+    public static final Item TOMBSTONE = new Item(new Item.Settings().registryKey(TOMB_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> TORII_KEY = ck("torii");
+    public static final Item TORII = new Item(new Item.Settings().registryKey(TORII_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> TREE_KEY = ck("dead_tree");
+    public static final Item DEAD_TREE = new Item(new Item.Settings().registryKey(TREE_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> MONU_KEY = ck("grave_monument");
+    public static final Item GRAVE_MONUMENT = new Item(new Item.Settings().registryKey(MONU_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> GALLOWS_KEY = ck("gallows_cage");
+    public static final Item GALLOWS_CAGE = new Item(new Item.Settings().registryKey(GALLOWS_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> SPIKE_KEY = ck("skull_spike");
+    public static final Item SKULL_SPIKE = new Item(new Item.Settings().registryKey(SPIKE_KEY).maxCount(1).rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
@@ -61,8 +83,19 @@ public class VoidHunt implements ModInitializer {
         Registry.register(Registries.ITEM, SAT_KEY, VOID_SATELLITE);
         Registry.register(Registries.ITEM, GEAR_KEY, VOID_GEAR);
         Registry.register(Registries.ITEM, CORE_KEY, VOID_CORE);
+        Registry.register(Registries.ITEM, FAN_KEY, CROW_FAN);
+        Registry.register(Registries.ITEM, CROW_KEY, CROW);
+        Registry.register(Registries.ITEM, TOMB_KEY, TOMBSTONE);
+        Registry.register(Registries.ITEM, TORII_KEY, TORII);
+        Registry.register(Registries.ITEM, TREE_KEY, DEAD_TREE);
+        Registry.register(Registries.ITEM, MONU_KEY, GRAVE_MONUMENT);
+        Registry.register(Registries.ITEM, GALLOWS_KEY, GALLOWS_CAGE);
+        Registry.register(Registries.ITEM, SPIKE_KEY, SKULL_SPIKE);
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
-            .register(entries -> { entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE); });
+            .register(entries -> {
+                entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE);
+                entries.add(CROW_FAN);
+            });
     }
 }

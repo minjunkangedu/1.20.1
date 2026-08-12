@@ -20,13 +20,16 @@ import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.effect.StatusEffect;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ModelTransformationMode;
+import net.minecraft.particle.DustParticleEffect;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.util.math.RotationAxis;
 import net.minecraft.server.MinecraftServer;
@@ -71,6 +74,24 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final double FREEZE_RADIUS = 320.0; // 20 chunks — everything (but caster) is frozen here
     private static final java.util.Map<UUID, Vec3d> frozen = new java.util.HashMap<>();
 
+    // ===== CROW FAN KIT — held-weapon skill set (까마귀의 부채) =====
+    private static boolean lastR = false, lastC = false, lastV = false, lastX = false;
+    private static int    crowDomainTimer = 0;
+    private static Vec3d  crowCenter = null;
+    private static final int    CROW_DOMAIN_TICKS = 300;  // 15 seconds
+    private static final double CROW_RADIUS       = 30.0; // a far bigger world
+    private static final float  CROW_DMG          = 5.0f; // domain tick damage
+    private static int wingsTimer = 0;
+    private static final int WINGS_TICKS = 160;
+    private static int   sealTimer = 0;
+    private static Vec3d sealCenter = null;
+    private static final int SEAL_TICKS = 50;
+    private static final List<Crow> crows = new ArrayList<>();
+    private static final int    MAX_CROWS = 8;
+    private static final double CROW_ATTACK_RANGE = 18.0;
+    private static final float  CROW_PECK_DMG = 7.0f;
+    private static final int GRN = 0xFF8CF06A, PUR = 0xFFB98CFF, BON = 0xFFE6E2D8;
+
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
     private static final float  AIM   = 0.20f;  // aim-assist strength
@@ -87,10 +108,21 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final ItemStack SAT_STACK   = new ItemStack(VoidHunt.VOID_SATELLITE);
     private static final ItemStack GEAR_STACK  = new ItemStack(VoidHunt.VOID_GEAR);
     private static final ItemStack CORE_STACK  = new ItemStack(VoidHunt.VOID_CORE);
+    private static final ItemStack CROW_STACK  = new ItemStack(VoidHunt.CROW);
+    private static final ItemStack TOMB_STACK  = new ItemStack(VoidHunt.TOMBSTONE);
+    private static final ItemStack TORII_STACK = new ItemStack(VoidHunt.TORII);
+    private static final ItemStack TREE_STACK  = new ItemStack(VoidHunt.DEAD_TREE);
+    private static final ItemStack MONU_STACK  = new ItemStack(VoidHunt.GRAVE_MONUMENT);
+    private static final ItemStack GALLOWS_STACK = new ItemStack(VoidHunt.GALLOWS_CAGE);
+    private static final ItemStack SPIKE_STACK   = new ItemStack(VoidHunt.SKULL_SPIKE);
 
     static final class Drone {
         Vec3d pos; Vec3d goal; int idx; int cd = 0;
         Drone(Vec3d p, int idx){ this.pos = p; this.idx = idx; }
+    }
+    static final class Crow {
+        Vec3d pos; double face; int idx; int cd = 0;
+        Crow(Vec3d p, int idx){ this.pos = p; this.idx = idx; }
     }
 
     @Override
@@ -116,6 +148,13 @@ public class VoidHuntClient implements ClientModInitializer {
         // DOMAIN structures (gears + central reactor core)
         if (domainTimer > 0 && domainCenter != null)
             renderDomain(ms, vcp, mc, camPos, light);
+        // CROW GRAVE world + summoned crows
+        if (crowDomainTimer > 0 && crowCenter != null)
+            renderCrowWorld(ms, vcp, mc, camPos, light);
+        for (Crow cw : crows) {
+            renderModel(CROW_STACK, ms, vcp, mc, camPos, light, cw.pos.x, cw.pos.y, cw.pos.z,
+                0.9f, (float) cw.face, 0f, false);
+        }
         for (Drone d : drones) {
             ms.push();
             ms.translate(d.pos.x - camPos.x, d.pos.y - camPos.y, d.pos.z - camPos.z);
@@ -248,6 +287,28 @@ public class VoidHuntClient implements ClientModInitializer {
         ms.pop();
     }
 
+    // Generic world model renderer (upright=false: stand normally & face; true: lay flat like a disc).
+    private void renderModel(ItemStack stack, MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc,
+                             Vec3d camPos, int light, double x, double y, double z,
+                             float scale, float facing, float spin, boolean upright) {
+        ms.push();
+        ms.translate(x - camPos.x, y - camPos.y, z - camPos.z);
+        ms.scale(scale, scale, scale);
+        ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(facing));
+        if (upright) ms.multiply(RotationAxis.POSITIVE_X.rotationDegrees(90));
+        if (spin != 0) ms.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(spin));
+        ms.translate(-0.5, -0.5, -0.5);
+        mc.getItemRenderer().renderItem(stack, ModelTransformationMode.FIXED,
+            light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
+        ms.pop();
+    }
+
+    private boolean heldFan(MinecraftClient c) {
+        return c.player != null
+            && (c.player.getMainHandStack().isOf(VoidHunt.CROW_FAN)
+             || c.player.getOffHandStack().isOf(VoidHunt.CROW_FAN));
+    }
+
     private boolean shadesOn(MinecraftClient c) {
         return c.player != null
             && c.player.getEquippedStack(EquipmentSlot.HEAD).isOf(VoidHunt.VOID_SHADES);
@@ -276,6 +337,9 @@ public class VoidHuntClient implements ClientModInitializer {
         target = null;
 
         if (c.player == null || c.world == null || c.interactionManager == null) return;
+
+        // CROW FAN kit runs independently of the shades (only needs the fan in hand)
+        tickCrowKit(c);
 
         // kill tracking: a target we hit has died
         if (attackedTarget != null && (attackedTarget.isRemoved() || !attackedTarget.isAlive())) {
@@ -582,6 +646,271 @@ public class VoidHuntClient implements ClientModInitializer {
         });
     }
 
+    // =====================================================================
+    //  CROW FAN KIT — 세계 / 까마귀 소환 / 까마귀의 날개 / 망자 봉인
+    // =====================================================================
+    private void tickCrowKit(MinecraftClient c) {
+        boolean held = heldFan(c);
+        long win = c.getWindow().getHandle();
+        boolean ns = c.currentScreen == null;
+        boolean rNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_R);
+        boolean cNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_C);
+        boolean vNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_V);
+        boolean xNow = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_X);
+        if (rNow && !lastR && crowDomainTimer <= 0) { crowDomainTimer = CROW_DOMAIN_TICKS; crowCenter = c.player.getPos(); }
+        if (cNow && !lastC) summonCrows(c);
+        if (vNow && !lastV && wingsTimer <= 0) activateWings(c);
+        if (xNow && !lastX && sealTimer <= 0) startSeal(c);
+        lastR = rNow; lastC = cNow; lastV = vNow; lastX = xNow;
+
+        if (!held) crows.clear();                       // crows are bound to the fan
+        if (crowDomainTimer > 0) { tickCrowDomain(c); crowDomainTimer--; }
+        if (wingsTimer > 0) { tickWings(c); wingsTimer--; }
+        if (sealTimer > 0) { tickSeal(c); sealTimer--; }
+        if (!crows.isEmpty()) tickCrows(c);
+    }
+
+    // ---- 까마귀 소환 (summon a murder of crows that hunt for you) ----
+    private void summonCrows(MinecraftClient c) {
+        crows.clear();
+        Vec3d base = c.player.getEyePos();
+        for (int i = 0; i < MAX_CROWS; i++) {
+            double a = i * (Math.PI * 2 / MAX_CROWS);
+            crows.add(new Crow(base.add(Math.cos(a) * 3.0, 1.5 + Math.sin(i) * 0.5, Math.sin(a) * 3.0), i));
+        }
+    }
+
+    private void tickCrows(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; long t = p.age;
+        double step = Math.PI * 2 / Math.max(1, crows.size());
+        List<MobEntity> host = w.getEntitiesByClass(MobEntity.class, p.getBoundingBox().expand(CROW_ATTACK_RANGE),
+            e -> e.isAlive() && (e instanceof HostileEntity));
+        for (Crow cw : crows) {
+            MobEntity tgt = host.stream()
+                .min(Comparator.comparingDouble(e -> e.squaredDistanceTo(cw.pos.x, cw.pos.y, cw.pos.z))).orElse(null);
+            Vec3d goal;
+            if (tgt != null) goal = tgt.getBoundingBox().getCenter().add(0, 0.3, 0);
+            else { double a = cw.idx * step + t * 0.05;
+                goal = p.getEyePos().add(Math.cos(a) * 3.2, 1.6 + Math.sin(t * 0.05 + cw.idx) * 0.4, Math.sin(a) * 3.2); }
+            Vec3d prev = cw.pos;
+            cw.pos = cw.pos.add(goal.subtract(cw.pos).multiply(0.2));
+            double mvx = cw.pos.x - prev.x, mvz = cw.pos.z - prev.z;
+            if (mvx * mvx + mvz * mvz > 1e-4) cw.face = Math.toDegrees(Math.atan2(-mvx, mvz));
+            if ((t % 4) == 0) w.addParticle(ParticleTypes.SMOKE, cw.pos.x, cw.pos.y - 0.2, cw.pos.z, 0, 0, 0);
+            if (cw.cd > 0) cw.cd--;
+            if (tgt != null && cw.pos.distanceTo(tgt.getBoundingBox().getCenter()) < 2.2 && cw.cd <= 0) {
+                crowHit(c, tgt, CROW_PECK_DMG); cw.cd = 10;
+                Vec3d tc = tgt.getBoundingBox().getCenter();
+                for (int k = 0; k < 5; k++) w.addParticle(ParticleTypes.CRIT, tc.x, tc.y, tc.z, 0, 0, 0);
+            }
+        }
+    }
+
+    // ---- 까마귀의 날개 (a leaping glide on crow wings) ----
+    private void activateWings(MinecraftClient c) {
+        wingsTimer = WINGS_TICKS;
+        c.player.setVelocity(c.player.getVelocity().x, 1.15, c.player.getVelocity().z);
+        playerEffect(c, StatusEffects.SLOW_FALLING, WINGS_TICKS, 0);
+        playerEffect(c, StatusEffects.SPEED, WINGS_TICKS, 1);
+        playerEffect(c, StatusEffects.JUMP_BOOST, WINGS_TICKS, 2);
+        for (int i = 0; i < 22; i++)
+            c.world.addParticle(ParticleTypes.SMOKE, c.player.getX() + (Math.random() - 0.5) * 1.6,
+                c.player.getY() + 1.0 + (Math.random() - 0.5), c.player.getZ() + (Math.random() - 0.5) * 1.6, 0, 0, 0);
+    }
+
+    private void tickWings(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        Vec3d back = p.getRotationVec(1.0f).multiply(-0.6);
+        for (int i = 0; i < 3; i++) {
+            double sx = (Math.random() - 0.5) * 1.4, sy = (Math.random() - 0.5) * 1.0;
+            w.addParticle(ParticleTypes.SMOKE, p.getX() + back.x + sx, p.getY() + 1.0 + sy, p.getZ() + back.z + sx, 0, 0, 0);
+        }
+        w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, p.getX() + back.x, p.getY() + 1.2, p.getZ() + back.z, 0, 0.01, 0);
+    }
+
+    // ---- 망자 봉인 (a sealing sigil that roots and withers the dead) ----
+    private void startSeal(MinecraftClient c) {
+        sealTimer = SEAL_TICKS;
+        Vec3d look = c.player.getRotationVec(1.0f);
+        Vec3d flat = new Vec3d(look.x, 0, look.z);
+        if (flat.lengthSquared() < 1e-4) flat = new Vec3d(0, 0, 1);
+        flat = flat.normalize();
+        sealCenter = c.player.getPos().add(flat.multiply(5.0)).add(0, 0.1, 0);
+    }
+
+    private void tickSeal(MinecraftClient c) {
+        if (sealCenter == null) return;
+        ClientWorld w = c.world; long t = c.player.age; Vec3d s = sealCenter;
+        int el = SEAL_TICKS - sealTimer; double gr = Math.min(1.0, el / 8.0) * 5.0; double sp = t * 0.15;
+        for (int rr = 1; rr <= 3; rr++) {
+            double rad = gr * rr / 3.0; int seg = 28;
+            for (int i = 0; i < seg; i++) {
+                double a = i * (Math.PI * 2 / seg) + (rr % 2 == 0 ? -sp : sp);
+                w.addParticle(rr == 2 ? ParticleTypes.SOUL_FIRE_FLAME : ParticleTypes.DRAGON_BREATH,
+                    s.x + Math.cos(a) * rad, s.y + 0.05, s.z + Math.sin(a) * rad, 0, 0, 0);
+            }
+        }
+        for (int i = 0; i < 5; i++) {
+            double a = i * (Math.PI * 2 / 5) + t * 0.02;
+            for (double d2 = 0.5; d2 < gr; d2 += 0.8)
+                w.addParticle(ParticleTypes.SOUL, s.x + Math.cos(a) * d2, s.y + 0.05, s.z + Math.sin(a) * d2, 0, 0, 0);
+        }
+        Box b = new Box(s.subtract(5.5, 3, 5.5), s.add(5.5, 4, 5.5));
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, b,
+            e -> e.isAlive() && (e instanceof HostileEntity) && e.getPos().distanceTo(s) <= 6.0);
+        for (MobEntity m : mobs) {
+            if ((t % 3) == 0) crowHit(c, m, 9.0f);
+            sealBind(c, m);
+            Vec3d mc2 = m.getBoundingBox().getCenter();
+            w.addParticle(ParticleTypes.SOUL_FIRE_FLAME, mc2.x, mc2.y, mc2.z, 0, 0.03, 0);
+        }
+    }
+
+    // ---- 까마귀들의 무덤 domain: poison everything, drape the world in ash ----
+    private void tickCrowDomain(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        if (crowCenter == null) crowCenter = p.getPos();
+        Vec3d ctr = crowCenter; double R = CROW_RADIUS; long t = p.age;
+        int elapsed = CROW_DOMAIN_TICKS - crowDomainTimer; double form = Math.min(1.0, elapsed / 16.0);
+        double spin = t * 0.03;
+        int MER = 12, SEG = 9;
+        for (int m = 0; m < MER; m++) {
+            double th = m * (Math.PI * 2 / MER) + spin;
+            for (int sgi = 0; sgi <= SEG; sgi++) {
+                double elev = (Math.PI / 2) * sgi / SEG * form; double hr = R * Math.cos(elev);
+                w.addParticle(ParticleTypes.SOUL_FIRE_FLAME,
+                    ctr.x + Math.cos(th) * hr, ctr.y + R * Math.sin(elev), ctr.z + Math.sin(th) * hr, 0, 0, 0);
+            }
+        }
+        if ((t & 1) == 0) {
+            for (int rr = 1; rr <= 4; rr++) {
+                double rad = R * rr / 4.0 * form; int seg = 30;
+                for (int sgi = 0; sgi < seg; sgi++) {
+                    double a = sgi * (Math.PI * 2 / seg) + spin * 0.3;
+                    w.addParticle(ParticleTypes.LARGE_SMOKE, ctr.x + Math.cos(a) * rad, ctr.y + 0.1, ctr.z + Math.sin(a) * rad, 0, 0.01, 0);
+                    if ((sgi % 3) == 0)
+                        w.addParticle(ParticleTypes.HAPPY_VILLAGER, ctr.x + Math.cos(a) * rad, ctr.y + 0.3 + Math.random() * 0.6, ctr.z + Math.sin(a) * rad, 0, 0, 0);
+                }
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            double a = Math.random() * Math.PI * 2, d2 = Math.random() * R * form;
+            w.addParticle(ParticleTypes.ASH, ctr.x + Math.cos(a) * d2, ctr.y + 8 + Math.random() * 10, ctr.z + Math.sin(a) * d2, 0, -0.02, 0);
+        }
+        // BLOOD RAIN — dark red drops falling across the whole grave
+        DustParticleEffect blood = new DustParticleEffect(0x8A0303, 1.4f);
+        for (int i = 0; i < 14; i++) {
+            double a = Math.random() * Math.PI * 2, d2 = Math.random() * R * form;
+            w.addParticle(blood, ctr.x + Math.cos(a) * d2, ctr.y + 4 + Math.random() * 14, ctr.z + Math.sin(a) * d2, 0, -0.35, 0);
+        }
+        Box box = new Box(ctr.subtract(R, R, R), ctr.add(R, R, R));
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, box,
+            e -> e.isAlive() && (e instanceof HostileEntity) && e.getPos().distanceTo(ctr) <= R + 1.0);
+        for (MobEntity m : mobs) {
+            Vec3d mc2 = m.getBoundingBox().getCenter();
+            if ((t % 2) == 0) w.addParticle(ParticleTypes.SOUL, mc2.x, mc2.y, mc2.z, 0, 0.02, 0);
+            if ((t % 4) == 0) crowHit(c, m, CROW_DMG);
+        }
+    }
+
+    // server-side effect helpers
+    private void crowHit(MinecraftClient c, MobEntity mob, float amt) {
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se instanceof LivingEntity le) {
+                le.damage(sw, sw.getDamageSources().magic(), amt);
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.POISON, 80, 2));
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.WITHER, 60, 0));
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 40, 2));
+            }
+        });
+    }
+    private void sealBind(MinecraftClient c, MobEntity mob) {
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se instanceof LivingEntity le) {
+                le.setVelocity(0, 0, 0);
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 20, 6));
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.WITHER, 40, 1));
+            }
+        });
+    }
+    private void playerEffect(MinecraftClient c, RegistryEntry<StatusEffect> eff, int dur, int amp) {
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = c.player.getUuid();
+        server.execute(() -> {
+            var sp = server.getPlayerManager().getPlayer(id);
+            if (sp != null) sp.addStatusEffect(new StatusEffectInstance(eff, dur, amp));
+        });
+    }
+
+    // Render the crow-grave structures around the domain center.
+    private void renderCrowWorld(MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc, Vec3d camPos, int light) {
+        Vec3d ctr = crowCenter; float age = mc.player.age;
+        int elapsed = CROW_DOMAIN_TICKS - crowDomainTimer; float rise = Math.min(1f, elapsed / 18f);
+        // central grand monument
+        float mScale = 3.2f * (0.25f + 0.75f * rise);
+        double mLift = (22.3 * 0.852 / 16.0) * mScale;
+        renderModel(MONU_STACK, ms, vcp, mc, camPos, light, ctr.x, ctr.y + mLift, ctr.z, mScale, age * 0.4f, 0f, false);
+        // torii gates at 4 cardinals
+        for (int i = 0; i < 4; i++) {
+            double a = i * (Math.PI / 2) + Math.PI / 4;
+            float sc = 2.4f * (0.3f + 0.7f * rise);
+            double lift = (13.15 / 16.0) * sc;
+            double tx = ctr.x + Math.cos(a) * CROW_RADIUS * 0.82, tz = ctr.z + Math.sin(a) * CROW_RADIUS * 0.82;
+            renderModel(TORII_STACK, ms, vcp, mc, camPos, light, tx, ctr.y + lift, tz, sc, (float) Math.toDegrees(a) + 90, 0f, false);
+        }
+        // tombstones ringing the grave
+        int TN = 10;
+        for (int i = 0; i < TN; i++) {
+            double a = i * (Math.PI * 2 / TN) + 0.3;
+            float sc = 2.0f * (0.3f + 0.7f * rise);
+            double lift = (9.8 / 16.0) * sc;
+            double tx = ctr.x + Math.cos(a) * CROW_RADIUS * 0.5, tz = ctr.z + Math.sin(a) * CROW_RADIUS * 0.5;
+            renderModel(TOMB_STACK, ms, vcp, mc, camPos, light, tx, ctr.y + lift, tz, sc, (float) Math.toDegrees(a) + 180, 0f, false);
+        }
+        // gnarled dead trees
+        int DT = 6;
+        for (int i = 0; i < DT; i++) {
+            double a = i * (Math.PI * 2 / DT) + 0.9;
+            float sc = 2.6f * (0.3f + 0.7f * rise);
+            double lift = (17.2 / 16.0) * sc;
+            double tx = ctr.x + Math.cos(a) * CROW_RADIUS * 0.66, tz = ctr.z + Math.sin(a) * CROW_RADIUS * 0.66;
+            renderModel(TREE_STACK, ms, vcp, mc, camPos, light, tx, ctr.y + lift, tz, sc, (float) (i * 57 % 360), 0f, false);
+        }
+        // gallows with hanging cages (gruesome)
+        int GN = 4;
+        for (int i = 0; i < GN; i++) {
+            double a = i * (Math.PI * 2 / GN) + 0.15;
+            float sc = 2.2f * (0.3f + 0.7f * rise);
+            double lift = (16.0 / 16.0) * sc;
+            double gx = ctr.x + Math.cos(a) * CROW_RADIUS * 0.72, gz = ctr.z + Math.sin(a) * CROW_RADIUS * 0.72;
+            renderModel(GALLOWS_STACK, ms, vcp, mc, camPos, light, gx, ctr.y + lift, gz, sc, (float) Math.toDegrees(a) + 90, 0f, false);
+        }
+        // impaled skull spikes
+        int SN = 6;
+        for (int i = 0; i < SN; i++) {
+            double a = i * (Math.PI * 2 / SN) + 0.55;
+            float sc = 1.9f * (0.3f + 0.7f * rise);
+            double lift = (14.0 / 16.0) * sc;
+            double sx = ctr.x + Math.cos(a) * CROW_RADIUS * 0.38, sz = ctr.z + Math.sin(a) * CROW_RADIUS * 0.38;
+            renderModel(SPIKE_STACK, ms, vcp, mc, camPos, light, sx, ctr.y + lift, sz, sc, (float) (i * 63 % 360), 0f, false);
+        }
+        // ambient crows wheeling overhead
+        int AC = 6;
+        for (int i = 0; i < AC; i++) {
+            double a = i * (Math.PI * 2 / AC) + age * 0.02;
+            double rad = CROW_RADIUS * 0.55;
+            double cx = ctr.x + Math.cos(a) * rad, cz = ctr.z + Math.sin(a) * rad;
+            double cy = ctr.y + 12 + (i % 3) * 3 + Math.sin(age * 0.03 + i) * 1.2;
+            renderModel(CROW_STACK, ms, vcp, mc, camPos, light, cx, cy, cz, 1.1f,
+                (float) Math.toDegrees(a) + 90, 0f, false);
+        }
+    }
+
     private void fireLaser(ClientWorld w, Vec3d from, Vec3d to) {
         int steps = (int) (from.distanceTo(to) * 3) + 4;
         for (int i = 0; i <= steps; i++) {
@@ -709,11 +1038,109 @@ public class VoidHuntClient implements ClientModInitializer {
         ctx.drawText(tr, Text.literal(sec), bx + barW + 6, by - 3, CY, true);
     }
 
+    // ---- CROW GRAVE overlay (領域展開 · 까마귀들의 무덤) — darker & fouler ----
+    private void drawCrowOverlay(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int W = ctx.getScaledWindowWidth();
+        int H = ctx.getScaledWindowHeight();
+        int elapsed = CROW_DOMAIN_TICKS - crowDomainTimer;
+        long t = c.player.age;
+
+        // void darkness swallowing the world (heavier than the machine domain)
+        float dk = Math.min(1f, elapsed / 16f);
+        if (crowDomainTimer < 20) dk *= crowDomainTimer / 20f;
+        ctx.fill(0, 0, W, H, ((int) (95 * dk) << 24) | 0x060A06);   // sickly dark tint
+        int N = 64, maxIn = Math.min(W, H) * 3 / 5, band = Math.max(1, maxIn / N) + 1;
+        for (int i = 0; i < N; i++) {
+            int inset = i * maxIn / N;
+            int a = (int) (235 * dk * Math.pow(1 - (double) i / N, 2.2));
+            if (a <= 2) continue;
+            int col = (a << 24) | 0x030603;
+            ctx.fill(inset, inset, W - inset, inset + band, col);
+            ctx.fill(inset, H - inset - band, W - inset, H - inset, col);
+            ctx.fill(inset, inset, inset + band, H - inset, col);
+            ctx.fill(W - inset - band, inset, W - inset, H - inset, col);
+        }
+        // faint green poison haze at the very bottom
+        ctx.fill(0, H - 40, W, H, (((int) (40 * dk)) << 24) | 0x2E5A18);
+
+        // HEARTBEAT blood pulse — the edges throb red like a dying heart
+        double beat = Math.max(0, Math.sin(t * 0.18)) * Math.max(0, Math.sin(t * 0.18));
+        int pulse = (int) (150 * dk * beat);
+        if (pulse > 3) {
+            int bandp = Math.max(1, maxIn / N) + 1;
+            for (int i = 0; i < N; i++) {
+                int inset = i * maxIn / N;
+                int a = (int) (pulse * Math.pow(1 - (double) i / N, 2.6));
+                if (a <= 2) continue;
+                int col = (a << 24) | 0x6A0202;
+                ctx.fill(inset, inset, W - inset, inset + bandp, col);
+                ctx.fill(inset, H - inset - bandp, W - inset, H - inset, col);
+                ctx.fill(inset, inset, inset + bandp, H - inset, col);
+                ctx.fill(W - inset - bandp, inset, W - inset, H - inset, col);
+            }
+        }
+        // blood dripping down from the top edge
+        for (int i = 0; i < 26; i++) {
+            int dx2 = (i * 61 + 13) % W;
+            int len = (int) (6 + 10 * (0.5 + 0.5 * Math.sin(i * 1.7 + t * 0.05)));
+            ctx.fill(dx2, 22, dx2 + 2, 22 + len, (((int) (170 * dk)) << 24) | 0x6A0202);
+        }
+
+        ctx.fill(0, 0, W, 22, 0xB0000000);
+        ctx.fill(0, H - 22, W, H, 0xB0000000);
+
+        if (elapsed < 50) {
+            String jp = "領域展開";
+            boolean blink = (elapsed < 28) && ((t / 3) % 2 == 0);
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 48f, 0f);
+            ctx.getMatrices().scale(3.0f, 3.0f, 1f);
+            ctx.drawText(tr, Text.literal(jp), -tr.getWidth(jp) / 2, 0, blink ? 0xFFFFFFFF : BON, true);
+            ctx.getMatrices().pop();
+            String kr = "까마귀들의 무덤";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 16f, 0f);
+            ctx.getMatrices().scale(1.9f, 1.9f, 1f);
+            ctx.drawText(tr, Text.literal(kr), -tr.getWidth(kr) / 2, 0, RED, true);
+            ctx.getMatrices().pop();
+            String en = "G R A V E   O F   C R O W S   ·   POISON";
+            ctx.drawText(tr, Text.literal(en), W / 2 - tr.getWidth(en) / 2, H / 2 + 16, GRN, true);
+        } else {
+            String b = "領域 · 까마귀들의 무덤";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, 4f, 0f);
+            ctx.getMatrices().scale(1.3f, 1.3f, 1f);
+            ctx.drawText(tr, Text.literal(b), -tr.getWidth(b) / 2, 0, BON, true);
+            ctx.getMatrices().pop();
+        }
+        int barW = 170, bx = W / 2 - barW / 2, by = H - 30;
+        ctx.fill(bx - 1, by - 1, bx + barW + 1, by + 4, 0xFF201810);
+        int fillW = (int) (barW * crowDomainTimer / (double) CROW_DOMAIN_TICKS);
+        ctx.fill(bx, by, bx + fillW, by + 3, GRN);
+        String sec = (crowDomainTimer / 20 + 1) + "s";
+        ctx.drawText(tr, Text.literal(sec), bx + barW + 6, by - 3, GRN, true);
+    }
+
+    // ---- small skill panel while the Crow Fan is held ----
+    private void drawFanPanel(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int y0 = shadesOn(c) ? 96 : 8;
+        ctx.drawText(tr, Text.literal("CROW FAN · 까마귀의 부채"), 8, y0, BON, true);
+        ctx.drawText(tr, Text.literal((crowDomainTimer > 0 ? ">> 세계 ACTIVE " + (crowDomainTimer / 20 + 1) + "s" : "= 세계 (R)")), 8, y0 + 12, crowDomainTimer > 0 ? RED : DIM, true);
+        ctx.drawText(tr, Text.literal("까마귀 소환 (C)  x" + crows.size()), 8, y0 + 22, crows.isEmpty() ? DIM : PUR, true);
+        ctx.drawText(tr, Text.literal((wingsTimer > 0 ? ">> 날개 " + (wingsTimer / 20 + 1) + "s" : "= 까마귀의 날개 (V)")), 8, y0 + 32, wingsTimer > 0 ? GRN : DIM, true);
+        ctx.drawText(tr, Text.literal((sealTimer > 0 ? ">> 봉인 " + (sealTimer / 20 + 1) + "s" : "= 망자 봉인 (X)")), 8, y0 + 42, sealTimer > 0 ? PUR : DIM, true);
+    }
+
     private void onHud(DrawContext ctx, RenderTickCounter counter) {
         MinecraftClient c = MinecraftClient.getInstance();
         if (c.player == null || c.world == null) return;
         // Domain overlay renders whenever the domain is up + shades on (even in standby).
         if (domainTimer > 0 && shadesOn(c)) drawDomainOverlay(ctx, c);
+        // Crow-grave overlay + fan HUD render whenever the fan is held.
+        if (crowDomainTimer > 0 && heldFan(c)) drawCrowOverlay(ctx, c);
+        if (heldFan(c)) drawFanPanel(ctx, c);
         if (!active(c)) return;
         ClientPlayerEntity p = c.player;
         TextRenderer tr = c.textRenderer;

@@ -76,6 +76,14 @@ public class VoidHunt implements ModInitializer {
     public static final RegistryKey<Item> SPIKE_KEY = ck("skull_spike");
     public static final Item SKULL_SPIKE = new Item(new Item.Settings().registryKey(SPIKE_KEY).maxCount(1).rarity(Rarity.EPIC));
 
+    // ===== DUEL ARENA set — the Duel Greatsword + colosseum structures =====
+    public static final RegistryKey<Item> SWORD_KEY = ck("duel_sword");
+    public static final Item DUEL_SWORD = new Item(new Item.Settings().registryKey(SWORD_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> APILLAR_KEY = ck("arena_pillar");
+    public static final Item ARENA_PILLAR = new Item(new Item.Settings().registryKey(APILLAR_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> AARCH_KEY = ck("arena_arch");
+    public static final Item ARENA_ARCH = new Item(new Item.Settings().registryKey(AARCH_KEY).maxCount(1).rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
@@ -91,11 +99,14 @@ public class VoidHunt implements ModInitializer {
         Registry.register(Registries.ITEM, MONU_KEY, GRAVE_MONUMENT);
         Registry.register(Registries.ITEM, GALLOWS_KEY, GALLOWS_CAGE);
         Registry.register(Registries.ITEM, SPIKE_KEY, SKULL_SPIKE);
+        Registry.register(Registries.ITEM, SWORD_KEY, DUEL_SWORD);
+        Registry.register(Registries.ITEM, APILLAR_KEY, ARENA_PILLAR);
+        Registry.register(Registries.ITEM, AARCH_KEY, ARENA_ARCH);
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
             .register(entries -> {
                 entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE);
-                entries.add(CROW_FAN);
+                entries.add(CROW_FAN); entries.add(DUEL_SWORD);
             });
     }
 }

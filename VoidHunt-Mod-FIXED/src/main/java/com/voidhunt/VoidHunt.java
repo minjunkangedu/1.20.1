@@ -86,6 +86,16 @@ public class VoidHunt implements ModInitializer {
     public static final RegistryKey<Item> HAND_KEY = ck("god_hand");
     public static final Item GOD_HAND = new Item(new Item.Settings().registryKey(HAND_KEY).maxCount(1).rarity(Rarity.EPIC));
 
+    // ===== OCEAN WORLD set — the Sea Trident + undersea structures =====
+    public static final RegistryKey<Item> TRIDENT_KEY = ck("sea_trident");
+    public static final Item SEA_TRIDENT = new Item(new Item.Settings().registryKey(TRIDENT_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> SHARK_KEY = ck("shark");
+    public static final Item SHARK = new Item(new Item.Settings().registryKey(SHARK_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> CORAL_KEY = ck("coral_pillar");
+    public static final Item CORAL_PILLAR = new Item(new Item.Settings().registryKey(CORAL_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> TEMPLE_KEY = ck("sea_temple");
+    public static final Item SEA_TEMPLE = new Item(new Item.Settings().registryKey(TEMPLE_KEY).maxCount(1).rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
@@ -105,11 +115,18 @@ public class VoidHunt implements ModInitializer {
         Registry.register(Registries.ITEM, APILLAR_KEY, ARENA_PILLAR);
         Registry.register(Registries.ITEM, AARCH_KEY, ARENA_ARCH);
         Registry.register(Registries.ITEM, HAND_KEY, GOD_HAND);
+        Registry.register(Registries.ITEM, TRIDENT_KEY, SEA_TRIDENT);
+        Registry.register(Registries.ITEM, SHARK_KEY, SHARK);
+        Registry.register(Registries.ITEM, CORAL_KEY, CORAL_PILLAR);
+        Registry.register(Registries.ITEM, TEMPLE_KEY, SEA_TEMPLE);
+        // multiplayer effect-sharing networking
+        VoidNet.registerCommon();
+        VoidNet.registerServer();
         // show up in the Combat creative tab
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
             .register(entries -> {
                 entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE);
-                entries.add(CROW_FAN); entries.add(DUEL_SWORD);
+                entries.add(CROW_FAN); entries.add(DUEL_SWORD); entries.add(SEA_TRIDENT);
             });
     }
 }

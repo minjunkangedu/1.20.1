@@ -2,6 +2,7 @@ package com.voidhunt;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
@@ -56,8 +57,8 @@ public class VoidHuntClient implements ClientModInitializer {
     private static boolean lastK     = false;   // edge-detect K key
     private static boolean lastL     = false;   // edge-detect L key (ultimate)
     private static boolean lastG     = false;   // edge-detect G key (domain expansion)
-    private static MobEntity target;
-    private static MobEntity attackedTarget = null; // for kill counting
+    private static LivingEntity target;
+    private static LivingEntity attackedTarget = null; // for kill counting
     private static int kills = 0, combo = 0, comboTimer = 0;
 
     // ---- ultimate (orbital strike satellite) ----
@@ -104,6 +105,10 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final double ARENA_RADIUS = 18.0;
     private static final int GLD = 0xFFF2C044, CRM = 0xFFE23C46;
     private static LivingEntity opponentEntity = null;
+
+    // ===== multiplayer effect sharing =====
+    private static boolean renderingRemote = false;   // true while painting someone else's effects
+    private static final java.util.Map<UUID, VoidNet.Fx> REMOTE = new java.util.HashMap<>();
     // sword skills: 광폭화 / 혈검술 / 전사의 심판
     private static boolean lastZ = false, lastN = false;
     private static int berserkTimer = 0;
@@ -116,6 +121,23 @@ public class VoidHuntClient implements ClientModInitializer {
     private static boolean judgmentDone = false;
     private static Vec3d  judgmentPos = null;
     private static final int JUDGE_TICKS = 50;
+
+    // ===== OCEAN WORLD — 바다의 세계 (held Sea Trident) =====
+    private static boolean lastJ = false, lastU = false, lastY = false, lastM = false;
+    private static int    seaTimer = 0;
+    private static Vec3d  seaCenter = null;
+    private static final int    SEA_TICKS  = 300;   // 15s
+    private static final double SEA_RADIUS = 28.0;
+    private static final float  SEA_DMG    = 5.0f;
+    private static int   waveTimer = 0;
+    private static Vec3d wavePos = null, waveDir = null;
+    private static final int WAVE_TICKS = 18;
+    private static int   maelTimer = 0;
+    private static Vec3d maelPos = null;
+    private static final int MAEL_TICKS = 70;
+    private static final List<Crow> sharks = new ArrayList<>();
+    private static final int MAX_SHARKS = 6;
+    private static final int AQUA = 0xFF44E0E0, SEAB = 0xFF5AA6FF;
 
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
@@ -143,6 +165,9 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final ItemStack PILLAR_STACK  = new ItemStack(VoidHunt.ARENA_PILLAR);
     private static final ItemStack ARCH_STACK    = new ItemStack(VoidHunt.ARENA_ARCH);
     private static final ItemStack HAND_STACK    = new ItemStack(VoidHunt.GOD_HAND);
+    private static final ItemStack SHARK_STACK   = new ItemStack(VoidHunt.SHARK);
+    private static final ItemStack CORAL_STACK   = new ItemStack(VoidHunt.CORAL_PILLAR);
+    private static final ItemStack TEMPLE_STACK  = new ItemStack(VoidHunt.SEA_TEMPLE);
 
     static final class Drone {
         Vec3d pos; Vec3d goal; int idx; int cd = 0;
@@ -160,6 +185,12 @@ public class VoidHuntClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
         HudRenderCallback.EVENT.register(this::onHud);
         WorldRenderEvents.AFTER_ENTITIES.register(this::onWorldRender);
+        // receive other players' effect snapshots
+        ClientPlayNetworking.registerGlobalReceiver(VoidNet.SyncS2C.ID, (payload, context) ->
+            context.client().execute(() -> {
+                VoidNet.Fx fx = payload.fx(); fx.age = 0;
+                REMOTE.put(payload.owner(), fx);
+            }));
     }
 
     // Render the 3D drone model at each drone's world position.
@@ -182,6 +213,11 @@ public class VoidHuntClient implements ClientModInitializer {
         // DUEL ARENA colosseum
         if (arenaTimer > 0 && arenaCenter != null)
             renderArena(ms, vcp, mc, camPos, light);
+        // OCEAN WORLD (sunken temple, coral, sharks)
+        if (seaTimer > 0 && seaCenter != null)
+            renderSeaWorld(ms, vcp, mc, camPos, light);
+        for (Crow sk : sharks)
+            renderModel(SHARK_STACK, ms, vcp, mc, camPos, light, sk.pos.x, sk.pos.y, sk.pos.z, 1.1f, (float) sk.face, 0f, false);
         // 전사의 심판 — the giant God-Warrior hand descends onto the doomed foe
         if (judgmentTimer > 0 && judgmentPos != null) {
             int el = JUDGE_TICKS - judgmentTimer;
@@ -216,6 +252,9 @@ public class VoidHuntClient implements ClientModInitializer {
                 light, OverlayTexture.DEFAULT_UV, ms, vcp, mc.world, 0);
             ms.pop();
         }
+        // paint every other player's shared effects
+        if (!REMOTE.isEmpty())
+            for (var e : REMOTE.entrySet()) renderRemote(e.getKey(), e.getValue(), ms, vcp, mc, camPos, light);
     }
 
     // Render the machine-world structures inside the domain: a central reactor
@@ -381,6 +420,11 @@ public class VoidHuntClient implements ClientModInitializer {
         tickCrowKit(c);
         // DUEL ARENA kit — only needs the Duel Greatsword in hand
         tickArenaKit(c);
+        // OCEAN WORLD kit — only needs the Sea Trident in hand
+        tickSeaKit(c);
+        // multiplayer: broadcast my effects, paint everyone else's
+        sendLocalFx(c);
+        tickRemotes(c);
 
         // kill tracking: a target we hit has died
         if (attackedTarget != null && (attackedTarget.isRemoved() || !attackedTarget.isAlive())) {
@@ -396,9 +440,11 @@ public class VoidHuntClient implements ClientModInitializer {
         // ---- AUTO-TARGET + AIM + ATTACK (only while hunt mode on) ----
         if (active(c)) {
             Box box = c.player.getBoundingBox().expand(RANGE);
-            List<MobEntity> mobs = c.world.getEntitiesByClass(MobEntity.class, box,
-                e -> e.isAlive() && (e instanceof HostileEntity) && c.player.canSee(e)); // canSee = no through-terrain
-            target = mobs.stream().min(Comparator.comparingDouble(c.player::squaredDistanceTo)).orElse(null);
+            // lock on to hostiles AND other players (never yourself), only if visible
+            List<LivingEntity> foes = c.world.getEntitiesByClass(LivingEntity.class, box,
+                e -> e.isAlive() && e != c.player && c.player.canSee(e)
+                    && ((e instanceof HostileEntity) || (e instanceof PlayerEntity)));
+            target = foes.stream().min(Comparator.comparingDouble(c.player::squaredDistanceTo)).orElse(null);
 
             if (target != null) {
                 if (aimAssist) aimAt(c.player, target);
@@ -647,6 +693,7 @@ public class VoidHuntClient implements ClientModInitializer {
     // Freeze all living entities (and other players) except the caster, in a 20-chunk
     // radius: each is held at its captured lock position. Runs on the integrated server.
     private void freezeField(MinecraftClient c) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer();
         if (server == null || domainCenter == null) return;
         UUID casterId = c.player.getUuid();
@@ -672,6 +719,7 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // Domain sure-hit: real damage + bind (slowness/weakness) in singleplayer.
     private void domainHit(MinecraftClient c, MobEntity mob, float amt) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer();
         if (server == null) return;
         UUID id = mob.getUuid();
@@ -856,6 +904,7 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // server-side effect helpers
     private void crowHit(MinecraftClient c, MobEntity mob, float amt) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
         server.execute(() -> {
             ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
@@ -869,6 +918,7 @@ public class VoidHuntClient implements ClientModInitializer {
         });
     }
     private void sealBind(MinecraftClient c, MobEntity mob) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
         server.execute(() -> {
             ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
@@ -881,6 +931,7 @@ public class VoidHuntClient implements ClientModInitializer {
         });
     }
     private void playerEffect(MinecraftClient c, RegistryEntry<StatusEffect> eff, int dur, int amp) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null) return; UUID id = c.player.getUuid();
         server.execute(() -> {
             var sp = server.getPlayerManager().getPlayer(id);
@@ -985,6 +1036,7 @@ public class VoidHuntClient implements ClientModInitializer {
         costHealthFraction(c, 0.15f);           // the caster pays 15% of their blood
     }
     private void costHealthFraction(MinecraftClient c, float frac) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null) return; UUID id = c.player.getUuid();
         server.execute(() -> {
             var sp = server.getPlayerManager().getPlayer(id);
@@ -1019,16 +1071,18 @@ public class VoidHuntClient implements ClientModInitializer {
         Vec3d ctr = arenaCenter; double R = ARENA_RADIUS; long t = p.age;
         int elapsed = ARENA_TICKS - arenaTimer; double form = Math.min(1.0, elapsed / 16.0); double spin = t * 0.02;
 
-        // the duel ends the instant the chosen foe falls — only then may anyone leave
-        if (elapsed > 6 && (opponentEntity == null || !opponentEntity.isAlive() || opponentEntity.isRemoved())) {
-            endArena(); return;
-        }
-        // the caster is bound inside too — an invisible wall holds them in the ring
-        double pdx = p.getX() - ctr.x, pdz = p.getZ() - ctr.z, pd = Math.sqrt(pdx * pdx + pdz * pdz);
-        if (pd > R * 0.94 && pd > 0.01) {
-            double f = R * 0.9 / pd;
-            p.setPosition(ctr.x + pdx * f, p.getY(), ctr.z + pdz * f);
-            Vec3d v = p.getVelocity(); p.setVelocity(v.x * 0.1, v.y, v.z * 0.1);
+        if (!renderingRemote) {
+            // the duel ends the instant the chosen foe falls — only then may anyone leave
+            if (elapsed > 6 && (opponentEntity == null || !opponentEntity.isAlive() || opponentEntity.isRemoved())) {
+                endArena(); return;
+            }
+            // the caster is bound inside too — an invisible wall holds them in the ring
+            double pdx = p.getX() - ctr.x, pdz = p.getZ() - ctr.z, pd = Math.sqrt(pdx * pdx + pdz * pdz);
+            if (pd > R * 0.94 && pd > 0.01) {
+                double f = R * 0.9 / pd;
+                p.setPosition(ctr.x + pdx * f, p.getY(), ctr.z + pdz * f);
+                Vec3d v = p.getVelocity(); p.setVelocity(v.x * 0.1, v.y, v.z * 0.1);
+            }
         }
         // glowing boundary wall of flame (rising as the arena forms)
         int seg = 60;
@@ -1067,6 +1121,7 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // server side: keep the chosen foe in & weakened, hurl everyone else out
     private void arenaField(MinecraftClient c) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null || arenaCenter == null) return;
         UUID casterId = c.player.getUuid(); UUID oppId = opponentId; Vec3d ctr = arenaCenter; double R = ARENA_RADIUS;
         server.execute(() -> {
@@ -1157,6 +1212,7 @@ public class VoidHuntClient implements ClientModInitializer {
         }
     }
     private void costHealth(MinecraftClient c, float amt) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null) return; UUID id = c.player.getUuid();
         server.execute(() -> {
             var sp = server.getPlayerManager().getPlayer(id);
@@ -1181,6 +1237,7 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // ---- 전사의 심판 : the God-Warrior's hand crushes a ranged coward ----
     private void instakillOpponent(MinecraftClient c) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer(); if (server == null || opponentId == null) return; UUID id = opponentId;
         server.execute(() -> {
             ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
@@ -1205,6 +1262,356 @@ public class VoidHuntClient implements ClientModInitializer {
              || c.player.getOffHandStack().isOf(VoidHunt.DUEL_SWORD));
     }
 
+    // ===== multiplayer: broadcast my visuals, paint everyone else's =====
+    private void sendLocalFx(MinecraftClient c) {
+        if (c.player == null || !ClientPlayNetworking.canSend(VoidNet.PushC2S.ID)) return;
+        VoidNet.Fx f = new VoidNet.Fx();
+        if (domainTimer > 0)     { f.mCtr = domainCenter; f.mT = domainTimer; }
+        if (crowDomainTimer > 0) { f.cCtr = crowCenter;   f.cT = crowDomainTimer; }
+        if (arenaTimer > 0)      { f.aCtr = arenaCenter;  f.aT = arenaTimer; }
+        f.uT = ultTimer; f.bT = berserkTimer;
+        if (judgmentTimer > 0)   { f.jPos = judgmentPos;  f.jT = judgmentTimer; }
+        if (seaTimer > 0)        { f.sCtr = seaCenter;    f.sT = seaTimer; }
+        for (Drone d : drones) f.drones.add(d.pos);
+        for (Crow cw : crows)  f.crows.add(cw.pos);
+        for (Crow sk : sharks) f.sharks.add(sk.pos);
+        if (f.anyActive()) ClientPlayNetworking.send(new VoidNet.PushC2S(f));
+    }
+
+    private void tickRemotes(MinecraftClient c) {
+        if (REMOTE.isEmpty() || c.world == null) return;
+        var it = REMOTE.entrySet().iterator();
+        while (it.hasNext()) {
+            VoidNet.Fx f = it.next().getValue();
+            f.age++;
+            if (f.age > 8) { it.remove(); continue; }
+            if (f.mT > 0) f.mT--; if (f.cT > 0) f.cT--; if (f.aT > 0) f.aT--;
+            if (f.jT > 0) f.jT--; if (f.sT > 0) f.sT--;
+            paintRemoteParticles(c, f);
+        }
+    }
+
+    private void paintRemoteParticles(MinecraftClient c, VoidNet.Fx f) {
+        Vec3d sm = domainCenter, sc = crowCenter, sa = arenaCenter, sj = judgmentPos, ss = seaCenter;
+        int smt = domainTimer, sct = crowDomainTimer, sat = arenaTimer, sjt = judgmentTimer, sst = seaTimer;
+        renderingRemote = true;
+        try {
+            if (f.mT > 0 && f.mCtr != null) { domainCenter = f.mCtr; domainTimer = f.mT; tickDomain(c); }
+            if (f.cT > 0 && f.cCtr != null) { crowCenter = f.cCtr; crowDomainTimer = f.cT; tickCrowDomain(c); }
+            if (f.aT > 0 && f.aCtr != null) { arenaCenter = f.aCtr; arenaTimer = f.aT; tickArena(c); }
+            if (f.jT > 0 && f.jPos != null) { judgmentPos = f.jPos; judgmentTimer = f.jT; tickJudgment(c); }
+            if (f.sT > 0 && f.sCtr != null) { seaCenter = f.sCtr; seaTimer = f.sT; tickSeaDomain(c); }
+        } catch (Exception ignored) {}
+        domainCenter = sm; crowCenter = sc; arenaCenter = sa; judgmentPos = sj; seaCenter = ss;
+        domainTimer = smt; crowDomainTimer = sct; arenaTimer = sat; judgmentTimer = sjt; seaTimer = sst;
+        renderingRemote = false;
+    }
+
+    private void renderRemote(UUID owner, VoidNet.Fx f, MatrixStack ms, VertexConsumerProvider vcp,
+                             MinecraftClient mc, Vec3d camPos, int light) {
+        Vec3d sm = domainCenter, sc = crowCenter, sa = arenaCenter, ss = seaCenter;
+        int smt = domainTimer, sct = crowDomainTimer, sat = arenaTimer, sst = seaTimer;
+        renderingRemote = true;
+        try {
+            if (f.mT > 0 && f.mCtr != null) { domainCenter = f.mCtr; domainTimer = f.mT; renderDomain(ms, vcp, mc, camPos, light); }
+            if (f.cT > 0 && f.cCtr != null) { crowCenter = f.cCtr; crowDomainTimer = f.cT; renderCrowWorld(ms, vcp, mc, camPos, light); }
+            if (f.aT > 0 && f.aCtr != null) { arenaCenter = f.aCtr; arenaTimer = f.aT; renderArena(ms, vcp, mc, camPos, light); }
+            if (f.sT > 0 && f.sCtr != null) { seaCenter = f.sCtr; seaTimer = f.sT; renderSeaWorld(ms, vcp, mc, camPos, light); }
+            float spin = mc.player.age * 2f;
+            for (Vec3d dp : f.drones) renderModel(DRONE_STACK, ms, vcp, mc, camPos, light, dp.x, dp.y, dp.z, 0.8f, 0f, spin, false);
+            for (Vec3d cp : f.crows)  renderModel(CROW_STACK,  ms, vcp, mc, camPos, light, cp.x, cp.y, cp.z, 0.9f, 0f, 0f, false);
+            for (Vec3d kp : f.sharks) renderModel(SHARK_STACK, ms, vcp, mc, camPos, light, kp.x, kp.y, kp.z, 1.1f, 0f, 0f, false);
+            if (f.uT > 0) {
+                PlayerEntity op = findPlayer(mc, owner);
+                if (op != null) { Vec3d s = op.getEyePos().add(0, ULT_HEIGHT, 0);
+                    renderModel(SAT_STACK, ms, vcp, mc, camPos, light, s.x, s.y, s.z, 4.0f, 0f, mc.player.age * 3f, false); }
+            }
+            if (f.jT > 0 && f.jPos != null) {
+                int el = JUDGE_TICKS - f.jT; float prog = Math.min(1f, el / 22f);
+                double startY = f.jPos.y + 30, curY = startY - (startY - (f.jPos.y + 2.5)) * prog;
+                renderModel(HAND_STACK, ms, vcp, mc, camPos, light, f.jPos.x, curY, f.jPos.z, 6.0f, 0f, 0f, false);
+            }
+        } catch (Exception ignored) {}
+        domainCenter = sm; crowCenter = sc; arenaCenter = sa; seaCenter = ss;
+        domainTimer = smt; crowDomainTimer = sct; arenaTimer = sat; seaTimer = sst;
+        renderingRemote = false;
+    }
+
+    private PlayerEntity findPlayer(MinecraftClient mc, UUID id) {
+        if (mc.world == null) return null;
+        for (PlayerEntity pl : mc.world.getPlayers()) if (pl.getUuid().equals(id)) return pl;
+        return null;
+    }
+
+    // =====================================================================
+    //  OCEAN WORLD — 바다의 세계 / 해일 / 소용돌이 / 상어 떼
+    // =====================================================================
+    private boolean heldTrident(MinecraftClient c) {
+        return c.player != null
+            && (c.player.getMainHandStack().isOf(VoidHunt.SEA_TRIDENT)
+             || c.player.getOffHandStack().isOf(VoidHunt.SEA_TRIDENT));
+    }
+
+    private void tickSeaKit(MinecraftClient c) {
+        boolean held = heldTrident(c);
+        long win = c.getWindow().getHandle();
+        boolean ns = c.currentScreen == null;
+        boolean jN = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_J);
+        boolean uN = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_U);
+        boolean yN = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_Y);
+        boolean mN = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_M);
+        if (jN && !lastJ && seaTimer <= 0)  startSea(c);
+        if (uN && !lastU && waveTimer <= 0) startWave(c);
+        if (yN && !lastY && maelTimer <= 0) startMaelstrom(c);
+        if (mN && !lastM) summonSharks(c);
+        lastJ = jN; lastU = uN; lastY = yN; lastM = mN;
+        if (!held) sharks.clear();
+        if (seaTimer > 0)  { tickSeaDomain(c); seaTimer--; }
+        if (waveTimer > 0) { tickWave(c); waveTimer--; }
+        if (maelTimer > 0) { tickMaelstrom(c); maelTimer--; }
+        if (!sharks.isEmpty()) tickSharks(c);
+    }
+
+    private void startSea(MinecraftClient c) { seaCenter = c.player.getPos(); seaTimer = SEA_TICKS; buffSeaCaster(c); }
+    private void buffSeaCaster(MinecraftClient c) {
+        playerEffect(c, StatusEffects.WATER_BREATHING, 130, 0);
+        playerEffect(c, StatusEffects.DOLPHINS_GRACE, 130, 1);
+        playerEffect(c, StatusEffects.CONDUIT_POWER, 130, 0);
+        playerEffect(c, StatusEffects.STRENGTH, 130, 0);
+    }
+
+    private void tickSeaDomain(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        if (seaCenter == null) seaCenter = p.getPos();
+        Vec3d ctr = seaCenter; double R = SEA_RADIUS; long t = p.age;
+        int elapsed = SEA_TICKS - seaTimer; double form = Math.min(1.0, elapsed / 16.0); double spin = t * 0.02;
+        for (int i = 0; i < 16; i++) {
+            double a = Math.random() * Math.PI * 2, d2 = Math.random() * R * form;
+            w.addParticle(ParticleTypes.BUBBLE_COLUMN_UP, ctr.x + Math.cos(a) * d2, ctr.y + Math.random() * 2, ctr.z + Math.sin(a) * d2, 0, 0.1, 0);
+        }
+        DustParticleEffect aqua = new DustParticleEffect(0x40E0E0, 1.5f);
+        int MER = 12, SEG = 8;
+        for (int m = 0; m < MER; m++) {
+            double th = m * (Math.PI * 2 / MER) + spin;
+            for (int s = 0; s <= SEG; s++) {
+                double elev = (Math.PI / 2) * s / SEG * form; double hr = R * Math.cos(elev);
+                w.addParticle(ParticleTypes.UNDERWATER, ctr.x + Math.cos(th) * hr, ctr.y + R * Math.sin(elev), ctr.z + Math.sin(th) * hr, 0, 0, 0);
+            }
+        }
+        if ((t & 1) == 0) {
+            for (int mm = 0; mm < 8; mm++) {            // descending god-rays
+                double th = mm * (Math.PI * 2 / 8) + spin * 0.5; double hr = R * 0.7;
+                for (int s = 0; s < 6; s++) w.addParticle(aqua, ctr.x + Math.cos(th) * hr, ctr.y + 15 - s * 2.4, ctr.z + Math.sin(th) * hr, 0, -0.02, 0);
+            }
+            for (int rr = 1; rr <= 3; rr++) {           // floor swirl
+                double rad = R * rr / 3.0 * form;
+                for (int s = 0; s < 28; s++) { double a = s * (Math.PI * 2 / 28) - spin; w.addParticle(ParticleTypes.SPLASH, ctr.x + Math.cos(a) * rad, ctr.y + 0.1, ctr.z + Math.sin(a) * rad, 0, 0, 0); }
+            }
+        }
+        if ((t % 40) == 0) buffSeaCaster(c);
+        Box box = new Box(ctr.subtract(R, R, R), ctr.add(R, R, R));
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, box,
+            e -> e.isAlive() && (e instanceof HostileEntity) && e.getPos().distanceTo(ctr) <= R + 1.0);
+        for (MobEntity m : mobs) {
+            Vec3d mc2 = m.getBoundingBox().getCenter();
+            if ((t % 2) == 0) w.addParticle(ParticleTypes.BUBBLE, mc2.x, mc2.y, mc2.z, 0, 0, 0);
+            if ((t % 4) == 0) seaHit(c, m, SEA_DMG);
+        }
+    }
+    private void seaHit(MinecraftClient c, MobEntity mob, float amt) {
+        if (renderingRemote) return;
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se instanceof LivingEntity le) {
+                le.damage(sw, sw.getDamageSources().drown(), amt);
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 40, 2));
+                le.addStatusEffect(new StatusEffectInstance(StatusEffects.MINING_FATIGUE, 40, 2));
+            }
+        });
+    }
+
+    // ---- 해일 (Tidal Wave) ----
+    private void startWave(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        waveTimer = WAVE_TICKS; wavePos = p.getEyePos();
+        Vec3d look = p.getRotationVec(1.0f); Vec3d flat = new Vec3d(look.x, 0, look.z);
+        waveDir = flat.lengthSquared() < 1e-4 ? new Vec3d(0, 0, 1) : flat.normalize();
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, p.getBoundingBox().expand(10), e -> e.isAlive());
+        for (MobEntity m : mobs) {
+            Vec3d to = m.getBoundingBox().getCenter().subtract(wavePos);
+            if (to.lengthSquared() > 100) continue;
+            Vec3d fl = new Vec3d(to.x, 0, to.z);
+            if (fl.normalize().dotProduct(waveDir) < 0.4) continue;
+            damage(c, m, 18f); knockback(c, m, waveDir);
+        }
+    }
+    private void tickWave(MinecraftClient c) {
+        if (wavePos == null || waveDir == null) return; ClientWorld w = c.world;
+        int el = WAVE_TICKS - waveTimer; double travel = el * 1.4;
+        Vec3d ctr = wavePos.add(waveDir.multiply(travel));
+        Vec3d right = waveDir.crossProduct(new Vec3d(0, 1, 0)).normalize();
+        for (int i = -6; i <= 6; i++) {
+            Vec3d base = ctr.add(right.multiply(i * 0.9));
+            for (int h = 0; h < 4; h++) {
+                w.addParticle(ParticleTypes.SPLASH, base.x, base.y + h * 0.7, base.z, 0, 0.05, 0);
+                if (h < 2) w.addParticle(ParticleTypes.BUBBLE, base.x, base.y + h * 0.7, base.z, 0, 0, 0);
+            }
+        }
+    }
+    private void knockback(MinecraftClient c, MobEntity mob, Vec3d dir) {
+        if (renderingRemote) return;
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
+        final Vec3d v = dir.normalize().multiply(1.7).add(0, 0.5, 0);
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id); if (se != null) se.setVelocity(v);
+        });
+    }
+
+    // ---- 소용돌이 (Maelstrom) ----
+    private void startMaelstrom(MinecraftClient c) {
+        maelTimer = MAEL_TICKS;
+        Vec3d look = c.player.getRotationVec(1.0f); Vec3d flat = new Vec3d(look.x, 0, look.z);
+        if (flat.lengthSquared() < 1e-4) flat = new Vec3d(0, 0, 1);
+        maelPos = c.player.getPos().add(flat.normalize().multiply(6)).add(0, 0.1, 0);
+    }
+    private void tickMaelstrom(MinecraftClient c) {
+        if (maelPos == null) return; ClientWorld w = c.world; long t = c.player.age; Vec3d s = maelPos; double sp = t * 0.35;
+        for (int rr = 1; rr <= 4; rr++) {
+            double rad = rr * 1.4; int seg = 20;
+            for (int i = 0; i < seg; i++) {
+                double a = i * (Math.PI * 2 / seg) + sp - rr * 0.5;
+                w.addParticle(ParticleTypes.BUBBLE, s.x + Math.cos(a) * rad, s.y + (4 - rr) * 0.6, s.z + Math.sin(a) * rad, 0, 0, 0);
+                if (rr == 1) w.addParticle(ParticleTypes.CURRENT_DOWN, s.x + Math.cos(a) * rad, s.y + 3, s.z + Math.sin(a) * rad, 0, 0, 0);
+            }
+        }
+        Box b = new Box(s.subtract(7, 4, 7), s.add(7, 4, 7));
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, b,
+            e -> e.isAlive() && (e instanceof HostileEntity) && e.getPos().distanceTo(s) <= 7.0);
+        for (MobEntity m : mobs) { pullTo(c, m, s); if ((t % 4) == 0) seaHit(c, m, 6f); }
+    }
+    private void pullTo(MinecraftClient c, MobEntity mob, Vec3d center) {
+        if (renderingRemote) return;
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = mob.getUuid();
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se != null) { Vec3d d = center.subtract(se.getPos()); if (d.lengthSquared() > 0.5) se.setVelocity(d.normalize().multiply(0.5).add(0, -0.1, 0)); }
+        });
+    }
+
+    // ---- 상어 떼 (Shark Swarm) ----
+    private void summonSharks(MinecraftClient c) {
+        sharks.clear(); Vec3d base = c.player.getEyePos();
+        for (int i = 0; i < MAX_SHARKS; i++) { double a = i * (Math.PI * 2 / MAX_SHARKS); sharks.add(new Crow(base.add(Math.cos(a) * 3, 0.5, Math.sin(a) * 3), i)); }
+    }
+    private void tickSharks(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; long t = p.age;
+        double step = Math.PI * 2 / Math.max(1, sharks.size());
+        List<MobEntity> host = w.getEntitiesByClass(MobEntity.class, p.getBoundingBox().expand(18),
+            e -> e.isAlive() && (e instanceof HostileEntity));
+        for (Crow sk : sharks) {
+            MobEntity tgt = host.stream().min(Comparator.comparingDouble(e -> e.squaredDistanceTo(sk.pos.x, sk.pos.y, sk.pos.z))).orElse(null);
+            Vec3d goal;
+            if (tgt != null) goal = tgt.getBoundingBox().getCenter();
+            else { double a = sk.idx * step + t * 0.05; goal = p.getEyePos().add(Math.cos(a) * 3.5, 0.4 + Math.sin(t * 0.05 + sk.idx) * 0.3, Math.sin(a) * 3.5); }
+            Vec3d prev = sk.pos;
+            sk.pos = sk.pos.add(goal.subtract(sk.pos).multiply(0.18));
+            double mvx = sk.pos.x - prev.x, mvz = sk.pos.z - prev.z;
+            if (mvx * mvx + mvz * mvz > 1e-4) sk.face = Math.toDegrees(Math.atan2(-mvx, mvz));
+            if ((t % 3) == 0) w.addParticle(ParticleTypes.BUBBLE, sk.pos.x, sk.pos.y, sk.pos.z, 0, 0, 0);
+            if (sk.cd > 0) sk.cd--;
+            if (tgt != null && sk.pos.distanceTo(tgt.getBoundingBox().getCenter()) < 2.6 && sk.cd <= 0) {
+                damage(c, tgt, 10f); sk.cd = 12;
+                Vec3d tc = tgt.getBoundingBox().getCenter();
+                for (int k = 0; k < 4; k++) w.addParticle(ParticleTypes.SPLASH, tc.x, tc.y, tc.z, 0, 0, 0);
+            }
+        }
+    }
+
+    private void renderSeaWorld(MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc, Vec3d camPos, int light) {
+        Vec3d ctr = seaCenter; float age = mc.player.age;
+        int elapsed = SEA_TICKS - seaTimer; float rise = Math.min(1f, elapsed / 18f);
+        float ts = 3.0f * (0.25f + 0.75f * rise);
+        double tLift = (22.5 * 0.991 / 16.0) * ts;
+        renderModel(TEMPLE_STACK, ms, vcp, mc, camPos, light, ctr.x, ctr.y + tLift, ctr.z, ts, age * 0.3f, 0f, false);
+        int PN = 8;
+        for (int i = 0; i < PN; i++) {
+            double a = i * (Math.PI * 2 / PN) + 0.2; float sc = 2.2f * (0.3f + 0.7f * rise); double lift = (18.5 / 16.0) * sc;
+            double px = ctr.x + Math.cos(a) * SEA_RADIUS * 0.85, pz = ctr.z + Math.sin(a) * SEA_RADIUS * 0.85;
+            renderModel(CORAL_STACK, ms, vcp, mc, camPos, light, px, ctr.y + lift, pz, sc, (float) (i * 47 % 360), 0f, false);
+        }
+        int SC = 4;
+        for (int i = 0; i < SC; i++) {
+            double a = i * (Math.PI * 2 / SC) + age * 0.02; double rad = SEA_RADIUS * 0.5;
+            double cx = ctr.x + Math.cos(a) * rad, cz = ctr.z + Math.sin(a) * rad, cy = ctr.y + 8 + (i % 2) * 3 + Math.sin(age * 0.03 + i) * 1.2;
+            renderModel(SHARK_STACK, ms, vcp, mc, camPos, light, cx, cy, cz, 1.2f, (float) Math.toDegrees(a) + 90, 0f, false);
+        }
+    }
+
+    private void drawSeaOverlay(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int W = ctx.getScaledWindowWidth(), H = ctx.getScaledWindowHeight();
+        int elapsed = SEA_TICKS - seaTimer; long t = c.player.age;
+        float dk = Math.min(1f, elapsed / 16f); if (seaTimer < 20) dk *= seaTimer / 20f;
+        ctx.fill(0, 0, W, H, ((int) (80 * dk) << 24) | 0x083048);   // deep-water blue tint
+        int N = 60, maxIn = Math.min(W, H) * 3 / 5, band = Math.max(1, maxIn / N) + 1;
+        for (int i = 0; i < N; i++) {
+            int inset = i * maxIn / N;
+            int a = (int) (200 * dk * Math.pow(1 - (double) i / N, 2.2));
+            if (a <= 2) continue;
+            int col = (a << 24) | 0x04202E;
+            ctx.fill(inset, inset, W - inset, inset + band, col);
+            ctx.fill(inset, H - inset - band, W - inset, H - inset, col);
+            ctx.fill(inset, inset, inset + band, H - inset, col);
+            ctx.fill(W - inset - band, inset, W - inset, H - inset, col);
+        }
+        ctx.fill(0, 0, W, 22, 0xAA000000);
+        ctx.fill(0, H - 22, W, H, 0xAA000000);
+        if (elapsed < 50) {
+            String jp = "海の世界";
+            boolean blink = (elapsed < 26) && ((t / 3) % 2 == 0);
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 48f, 0f);
+            ctx.getMatrices().scale(3.1f, 3.1f, 1f);
+            ctx.drawText(tr, Text.literal(jp), -tr.getWidth(jp) / 2, 0, blink ? 0xFFFFFFFF : AQUA, true);
+            ctx.getMatrices().pop();
+            String kr = "바다의 세계";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, H / 2f - 16f, 0f);
+            ctx.getMatrices().scale(1.9f, 1.9f, 1f);
+            ctx.drawText(tr, Text.literal(kr), -tr.getWidth(kr) / 2, 0, SEAB, true);
+            ctx.getMatrices().pop();
+            String en = "O C E A N   W O R L D   ·   DROWN";
+            ctx.drawText(tr, Text.literal(en), W / 2 - tr.getWidth(en) / 2, H / 2 + 16, BON, true);
+        } else {
+            String b = "海 · 바다의 세계";
+            ctx.getMatrices().push();
+            ctx.getMatrices().translate(W / 2f, 4f, 0f);
+            ctx.getMatrices().scale(1.3f, 1.3f, 1f);
+            ctx.drawText(tr, Text.literal(b), -tr.getWidth(b) / 2, 0, AQUA, true);
+            ctx.getMatrices().pop();
+        }
+        int barW = 180, bx = W / 2 - barW / 2, by = H - 30;
+        ctx.fill(bx - 1, by - 1, bx + barW + 1, by + 4, 0xFF08222E);
+        int fillW = (int) (barW * seaTimer / (double) SEA_TICKS);
+        ctx.fill(bx, by, bx + fillW, by + 3, AQUA);
+        String sec = (seaTimer / 20 + 1) + "s";
+        ctx.drawText(tr, Text.literal(sec), bx + barW + 6, by - 3, AQUA, true);
+    }
+    private void drawTridentPanel(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int H = ctx.getScaledWindowHeight();
+        int y0 = H - 120;
+        ctx.drawText(tr, Text.literal("SEA TRIDENT · 바다의 삼지창"), 8, y0, AQUA, true);
+        ctx.drawText(tr, Text.literal(seaTimer > 0 ? ">> 바다의 세계 " + (seaTimer / 20 + 1) + "s" : "= 바다의 세계 (J)"), 8, y0 + 12, seaTimer > 0 ? SEAB : DIM, true);
+        ctx.drawText(tr, Text.literal(waveTimer > 0 ? ">> 해일" : "= 해일 (U)"), 8, y0 + 22, waveTimer > 0 ? AQUA : DIM, true);
+        ctx.drawText(tr, Text.literal(maelTimer > 0 ? ">> 소용돌이 " + (maelTimer / 20 + 1) + "s" : "= 소용돌이 (Y)"), 8, y0 + 32, maelTimer > 0 ? AQUA : DIM, true);
+        ctx.drawText(tr, Text.literal("상어 떼 소환 (M)  x" + sharks.size()), 8, y0 + 42, sharks.isEmpty() ? DIM : SEAB, true);
+    }
+
     private void fireLaser(ClientWorld w, Vec3d from, Vec3d to) {
         int steps = (int) (from.distanceTo(to) * 3) + 4;
         for (int i = 0; i <= steps; i++) {
@@ -1218,6 +1625,7 @@ public class VoidHuntClient implements ClientModInitializer {
 
     // Deal real damage in singleplayer (integrated server). Multiplayer = visual only.
     private void damage(MinecraftClient c, MobEntity mob, float amt) {
+        if (renderingRemote) return;
         MinecraftServer server = c.getServer();
         if (server == null) return;
         UUID id = mob.getUuid();
@@ -1559,6 +1967,9 @@ public class VoidHuntClient implements ClientModInitializer {
         // Duel arena overlay + sword HUD render whenever the greatsword is held.
         if (arenaTimer > 0 && heldSword(c)) drawArenaOverlay(ctx, c);
         if (heldSword(c)) { drawSwordPanel(ctx, c); drawSwordFx(ctx, c); }
+        // Ocean world overlay + trident HUD whenever the trident is held.
+        if (seaTimer > 0 && heldTrident(c)) drawSeaOverlay(ctx, c);
+        if (heldTrident(c)) drawTridentPanel(ctx, c);
         if (!active(c)) return;
         ClientPlayerEntity p = c.player;
         TextRenderer tr = c.textRenderer;
@@ -1566,8 +1977,9 @@ public class VoidHuntClient implements ClientModInitializer {
         int Hh = ctx.getScaledWindowHeight();
         long t = p.age;
 
-        List<MobEntity> hostiles = c.world.getEntitiesByClass(MobEntity.class,
-            p.getBoundingBox().expand(RANGE), e -> e.isAlive() && (e instanceof HostileEntity));
+        List<LivingEntity> hostiles = c.world.getEntitiesByClass(LivingEntity.class,
+            p.getBoundingBox().expand(RANGE),
+            e -> e.isAlive() && e != p && ((e instanceof HostileEntity) || (e instanceof PlayerEntity)));
 
         // ---------- top-left system panel ----------
         ctx.drawText(tr, Text.literal("J.A.R.V.I.S"), 8, 8, CY, true);
@@ -1602,13 +2014,13 @@ public class VoidHuntClient implements ClientModInitializer {
         float yawR = (float) Math.toRadians(p.getYaw());
         double fwx = -Math.sin(yawR), fwz = Math.cos(yawR);   // forward
         double rgx = Math.cos(yawR),  rgz = Math.sin(yawR);   // right
-        for (MobEntity m : hostiles) {
+        for (LivingEntity m : hostiles) {
             double relX = m.getX() - p.getX(), relZ = m.getZ() - p.getZ();
             double forward = relX * fwx + relZ * fwz;
             double rightd  = relX * rgx + relZ * rgz;
             int bx = rcx + (int) (rightd / RANGE * R);
             int by = rcy - (int) (forward / RANGE * R);
-            int col = (target != null && m == target) ? AMB : (m.getMaxHealth() >= 40 ? RED : CY);
+            int col = (target != null && m == target) ? AMB : ((m instanceof PlayerEntity) ? PUR : (m.getMaxHealth() >= 40 ? RED : CY));
             ctx.fill(bx - 1, by - 1, bx + 2, by + 2, col);
         }
         ctx.fill(rcx - 1, rcy - 1, rcx + 2, rcy + 2, 0xFF8FF6FF);

@@ -96,6 +96,16 @@ public class VoidHunt implements ModInitializer {
     public static final RegistryKey<Item> TEMPLE_KEY = ck("sea_temple");
     public static final Item SEA_TEMPLE = new Item(new Item.Settings().registryKey(TEMPLE_KEY).maxCount(1).rarity(Rarity.EPIC));
 
+    // ===== BIKER HIGHWAY set — the Neon Pipe + street props =====
+    public static final RegistryKey<Item> PIPE_KEY = ck("neon_pipe");
+    public static final Item NEON_PIPE = new Item(new Item.Settings().registryKey(PIPE_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> BIKE_KEY = ck("ghost_bike");
+    public static final Item GHOST_BIKE = new Item(new Item.Settings().registryKey(BIKE_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> LIGHT_KEY = ck("street_light");
+    public static final Item STREET_LIGHT = new Item(new Item.Settings().registryKey(LIGHT_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> NGATE_KEY = ck("neon_gate");
+    public static final Item NEON_GATE = new Item(new Item.Settings().registryKey(NGATE_KEY).maxCount(1).rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
@@ -119,6 +129,10 @@ public class VoidHunt implements ModInitializer {
         Registry.register(Registries.ITEM, SHARK_KEY, SHARK);
         Registry.register(Registries.ITEM, CORAL_KEY, CORAL_PILLAR);
         Registry.register(Registries.ITEM, TEMPLE_KEY, SEA_TEMPLE);
+        Registry.register(Registries.ITEM, PIPE_KEY, NEON_PIPE);
+        Registry.register(Registries.ITEM, BIKE_KEY, GHOST_BIKE);
+        Registry.register(Registries.ITEM, LIGHT_KEY, STREET_LIGHT);
+        Registry.register(Registries.ITEM, NGATE_KEY, NEON_GATE);
         // multiplayer effect-sharing networking
         VoidNet.registerCommon();
         VoidNet.registerServer();
@@ -126,7 +140,7 @@ public class VoidHunt implements ModInitializer {
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT)
             .register(entries -> {
                 entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE);
-                entries.add(CROW_FAN); entries.add(DUEL_SWORD); entries.add(SEA_TRIDENT);
+                entries.add(CROW_FAN); entries.add(DUEL_SWORD); entries.add(SEA_TRIDENT); entries.add(NEON_PIPE);
             });
     }
 }

@@ -19,15 +19,15 @@ public final class VoidNet {
 
     /** A snapshot of one caster's active visuals. */
     public static final class Fx {
-        public Vec3d mCtr, cCtr, aCtr, jPos, sCtr, rCtr;  // machine/crow/arena/judgment/sea/road
-        public int mT, cT, aT, uT, jT, bT, sT, rT;        // timers (0 = off), uT=ult, bT=berserk, sT=sea, rT=road
+        public Vec3d mCtr, cCtr, aCtr, jPos, sCtr, rCtr, kCtr;  // machine/crow/arena/judgment/sea/road/king
+        public int mT, cT, aT, uT, jT, bT, sT, rT, kT, gT;      // +kT=king domain, gT=guardian hands
         public final List<Vec3d> drones = new ArrayList<>();
         public final List<Vec3d> crows  = new ArrayList<>();
         public final List<Vec3d> sharks = new ArrayList<>();
         public final List<Vec3d> bikes  = new ArrayList<>();
         public int age = 0;                        // client-side: ticks since last packet
         public boolean anyActive() {
-            return mT > 0 || cT > 0 || aT > 0 || uT > 0 || jT > 0 || bT > 0 || sT > 0 || rT > 0
+            return mT > 0 || cT > 0 || aT > 0 || uT > 0 || jT > 0 || bT > 0 || sT > 0 || rT > 0 || kT > 0 || gT > 0
                 || !drones.isEmpty() || !crows.isEmpty() || !sharks.isEmpty() || !bikes.isEmpty();
         }
     }
@@ -49,6 +49,7 @@ public final class VoidNet {
         b.writeVarInt(f.bT);
         wVec(b, f.sCtr); b.writeVarInt(f.sT);
         wVec(b, f.rCtr); b.writeVarInt(f.rT);
+        wVec(b, f.kCtr); b.writeVarInt(f.kT); b.writeVarInt(f.gT);
         b.writeVarInt(f.drones.size()); for (Vec3d v : f.drones) { b.writeDouble(v.x); b.writeDouble(v.y); b.writeDouble(v.z); }
         b.writeVarInt(f.crows.size());  for (Vec3d v : f.crows)  { b.writeDouble(v.x); b.writeDouble(v.y); b.writeDouble(v.z); }
         b.writeVarInt(f.sharks.size()); for (Vec3d v : f.sharks) { b.writeDouble(v.x); b.writeDouble(v.y); b.writeDouble(v.z); }
@@ -64,6 +65,7 @@ public final class VoidNet {
         f.bT = b.readVarInt();
         f.sCtr = rVec(b); f.sT = b.readVarInt();
         f.rCtr = rVec(b); f.rT = b.readVarInt();
+        f.kCtr = rVec(b); f.kT = b.readVarInt(); f.gT = b.readVarInt();
         int n = b.readVarInt(); for (int i = 0; i < n; i++) f.drones.add(new Vec3d(b.readDouble(), b.readDouble(), b.readDouble()));
         int m = b.readVarInt(); for (int i = 0; i < m; i++) f.crows.add(new Vec3d(b.readDouble(), b.readDouble(), b.readDouble()));
         int k = b.readVarInt(); for (int i = 0; i < k; i++) f.sharks.add(new Vec3d(b.readDouble(), b.readDouble(), b.readDouble()));

@@ -155,6 +155,21 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final int MAX_BIKES = 5;
     private static final int NPINK = 0xFFFF46B4, NCYAN = 0xFF3CE6F0;
 
+    // ===== KING'S WORLD — 왕의 세계 (held King Scepter) + Knight =====
+    private static boolean lastKd = false, lastAu = false, lastGu = false, lastTr = false, lastKn = false;
+    private static int    kingTimer = 0;
+    private static Vec3d  kingCenter = null;
+    private static UUID   knightId = null;
+    private static String knightName = "—";
+    private static boolean kingHpPaid = false;
+    private static final int    KING_TICKS  = 400;   // 20s reign
+    private static final double KING_RADIUS = 24.0;
+    private static final float  KING_DMG    = 6.0f;
+    private static int auraTimer = 0;   private static final int AURA_TICKS = 16;
+    private static int guardTimer = 0;  private static final int GUARD_TICKS = 60;   // 3s guardian hands
+    private static int knightDashTimer = 0; private static final int KDASH_TICKS = 16;
+    private static final int ROYP = 0xFFB07CF0;
+
     private static final double RANGE = 20.0;   // detection radius
     private static final double REACH = 3.0;    // melee reach
     private static final float  AIM   = 0.20f;  // aim-assist strength
@@ -187,6 +202,8 @@ public class VoidHuntClient implements ClientModInitializer {
     private static final ItemStack BIKE_STACK    = new ItemStack(VoidHunt.GHOST_BIKE);
     private static final ItemStack LIGHT_STACK   = new ItemStack(VoidHunt.STREET_LIGHT);
     private static final ItemStack NGATE_STACK   = new ItemStack(VoidHunt.NEON_GATE);
+    private static final ItemStack THRONE_STACK  = new ItemStack(VoidHunt.KING_THRONE);
+    private static final ItemStack RPILLAR_STACK = new ItemStack(VoidHunt.ROYAL_PILLAR);
 
     static final class Drone {
         Vec3d pos; Vec3d goal; int idx; int cd = 0;
@@ -242,6 +259,11 @@ public class VoidHuntClient implements ClientModInitializer {
             renderRoadWorld(ms, vcp, mc, camPos, light);
         for (Crow bk : bikes)
             renderModel(BIKE_STACK, ms, vcp, mc, camPos, light, bk.pos.x, bk.pos.y, bk.pos.z, 1.2f, (float) bk.face, 0f, false);
+        // KING'S WORLD (throne, royal pillars) + guardian hands
+        if (kingTimer > 0 && kingCenter != null)
+            renderKingWorld(ms, vcp, mc, camPos, light);
+        if (guardTimer > 0 && mc.player != null)
+            renderGuardianHands(ms, vcp, mc, camPos, light, mc.player.getPos(), mc.player.age);
         // 전사의 심판 — the giant God-Warrior hand descends onto the doomed foe
         if (judgmentTimer > 0 && judgmentPos != null) {
             int el = JUDGE_TICKS - judgmentTimer;
@@ -448,6 +470,9 @@ public class VoidHuntClient implements ClientModInitializer {
         tickSeaKit(c);
         // BIKER HIGHWAY kit — only needs the Neon Pipe in hand
         tickRoadKit(c);
+        // KING'S WORLD kit (scepter) + Knight kit (knight blade)
+        tickKingKit(c);
+        tickKnightKit(c);
         // multiplayer: broadcast my effects, paint everyone else's
         sendLocalFx(c);
         tickRemotes(c);
@@ -1299,6 +1324,8 @@ public class VoidHuntClient implements ClientModInitializer {
         if (judgmentTimer > 0)   { f.jPos = judgmentPos;  f.jT = judgmentTimer; }
         if (seaTimer > 0)        { f.sCtr = seaCenter;    f.sT = seaTimer; }
         if (roadTimer > 0)       { f.rCtr = roadCenter;   f.rT = roadTimer; }
+        if (kingTimer > 0)       { f.kCtr = kingCenter;   f.kT = kingTimer; }
+        f.gT = guardTimer;
         for (Drone d : drones) f.drones.add(d.pos);
         for (Crow cw : crows)  f.crows.add(cw.pos);
         for (Crow sk : sharks) f.sharks.add(sk.pos);
@@ -1315,13 +1342,14 @@ public class VoidHuntClient implements ClientModInitializer {
             if (f.age > 8) { it.remove(); continue; }
             if (f.mT > 0) f.mT--; if (f.cT > 0) f.cT--; if (f.aT > 0) f.aT--;
             if (f.jT > 0) f.jT--; if (f.sT > 0) f.sT--; if (f.rT > 0) f.rT--;
+            if (f.kT > 0) f.kT--; if (f.gT > 0) f.gT--;
             paintRemoteParticles(c, f);
         }
     }
 
     private void paintRemoteParticles(MinecraftClient c, VoidNet.Fx f) {
-        Vec3d sm = domainCenter, sc = crowCenter, sa = arenaCenter, sj = judgmentPos, ss = seaCenter, sr = roadCenter;
-        int smt = domainTimer, sct = crowDomainTimer, sat = arenaTimer, sjt = judgmentTimer, sst = seaTimer, srt = roadTimer;
+        Vec3d sm = domainCenter, sc = crowCenter, sa = arenaCenter, sj = judgmentPos, ss = seaCenter, sr = roadCenter, sk = kingCenter;
+        int smt = domainTimer, sct = crowDomainTimer, sat = arenaTimer, sjt = judgmentTimer, sst = seaTimer, srt = roadTimer, skt = kingTimer;
         renderingRemote = true;
         try {
             if (f.mT > 0 && f.mCtr != null) { domainCenter = f.mCtr; domainTimer = f.mT; tickDomain(c); }
@@ -1330,16 +1358,17 @@ public class VoidHuntClient implements ClientModInitializer {
             if (f.jT > 0 && f.jPos != null) { judgmentPos = f.jPos; judgmentTimer = f.jT; tickJudgment(c); }
             if (f.sT > 0 && f.sCtr != null) { seaCenter = f.sCtr; seaTimer = f.sT; tickSeaDomain(c); }
             if (f.rT > 0 && f.rCtr != null) { roadCenter = f.rCtr; roadTimer = f.rT; tickRoadDomain(c); }
+            if (f.kT > 0 && f.kCtr != null) { kingCenter = f.kCtr; kingTimer = f.kT; tickKingDomain(c); }
         } catch (Exception ignored) {}
-        domainCenter = sm; crowCenter = sc; arenaCenter = sa; judgmentPos = sj; seaCenter = ss; roadCenter = sr;
-        domainTimer = smt; crowDomainTimer = sct; arenaTimer = sat; judgmentTimer = sjt; seaTimer = sst; roadTimer = srt;
+        domainCenter = sm; crowCenter = sc; arenaCenter = sa; judgmentPos = sj; seaCenter = ss; roadCenter = sr; kingCenter = sk;
+        domainTimer = smt; crowDomainTimer = sct; arenaTimer = sat; judgmentTimer = sjt; seaTimer = sst; roadTimer = srt; kingTimer = skt;
         renderingRemote = false;
     }
 
     private void renderRemote(UUID owner, VoidNet.Fx f, MatrixStack ms, VertexConsumerProvider vcp,
                              MinecraftClient mc, Vec3d camPos, int light) {
-        Vec3d sm = domainCenter, sc = crowCenter, sa = arenaCenter, ss = seaCenter, sr = roadCenter;
-        int smt = domainTimer, sct = crowDomainTimer, sat = arenaTimer, sst = seaTimer, srt = roadTimer;
+        Vec3d sm = domainCenter, sc = crowCenter, sa = arenaCenter, ss = seaCenter, sr = roadCenter, sk = kingCenter;
+        int smt = domainTimer, sct = crowDomainTimer, sat = arenaTimer, sst = seaTimer, srt = roadTimer, skt = kingTimer;
         renderingRemote = true;
         try {
             if (f.mT > 0 && f.mCtr != null) { domainCenter = f.mCtr; domainTimer = f.mT; renderDomain(ms, vcp, mc, camPos, light); }
@@ -1347,6 +1376,8 @@ public class VoidHuntClient implements ClientModInitializer {
             if (f.aT > 0 && f.aCtr != null) { arenaCenter = f.aCtr; arenaTimer = f.aT; renderArena(ms, vcp, mc, camPos, light); }
             if (f.sT > 0 && f.sCtr != null) { seaCenter = f.sCtr; seaTimer = f.sT; renderSeaWorld(ms, vcp, mc, camPos, light); }
             if (f.rT > 0 && f.rCtr != null) { roadCenter = f.rCtr; roadTimer = f.rT; renderRoadWorld(ms, vcp, mc, camPos, light); }
+            if (f.kT > 0 && f.kCtr != null) { kingCenter = f.kCtr; kingTimer = f.kT; renderKingWorld(ms, vcp, mc, camPos, light); }
+            if (f.gT > 0) { PlayerEntity kp = findPlayer(mc, owner); if (kp != null) renderGuardianHands(ms, vcp, mc, camPos, light, kp.getPos(), mc.player.age); }
             float spin = mc.player.age * 2f;
             for (Vec3d dp : f.drones) renderModel(DRONE_STACK, ms, vcp, mc, camPos, light, dp.x, dp.y, dp.z, 0.8f, 0f, spin, false);
             for (Vec3d cp : f.crows)  renderModel(CROW_STACK,  ms, vcp, mc, camPos, light, cp.x, cp.y, cp.z, 0.9f, 0f, 0f, false);
@@ -1363,8 +1394,8 @@ public class VoidHuntClient implements ClientModInitializer {
                 renderModel(HAND_STACK, ms, vcp, mc, camPos, light, f.jPos.x, curY, f.jPos.z, 6.0f, 0f, 0f, false);
             }
         } catch (Exception ignored) {}
-        domainCenter = sm; crowCenter = sc; arenaCenter = sa; seaCenter = ss; roadCenter = sr;
-        domainTimer = smt; crowDomainTimer = sct; arenaTimer = sat; seaTimer = sst; roadTimer = srt;
+        domainCenter = sm; crowCenter = sc; arenaCenter = sa; seaCenter = ss; roadCenter = sr; kingCenter = sk;
+        domainTimer = smt; crowDomainTimer = sct; arenaTimer = sat; seaTimer = sst; roadTimer = srt; kingTimer = skt;
         renderingRemote = false;
     }
 
@@ -1898,6 +1929,230 @@ public class VoidHuntClient implements ClientModInitializer {
         ctx.drawText(tr, Text.literal(hornTimer > 0 ? ">> 클락션 굉음" : "= 클락션 굉음 (.)"), 8, y0 + 42, hornTimer > 0 ? NPINK : DIM, true);
     }
 
+    // =====================================================================
+    //  KING'S WORLD — 왕의 세계 / 오라 / 왕국의 수호자 / 조공  (+ 기사의 대쉬)
+    // =====================================================================
+    private boolean heldScepter(MinecraftClient c) {
+        return c.player != null && (c.player.getMainHandStack().isOf(VoidHunt.KING_SCEPTER) || c.player.getOffHandStack().isOf(VoidHunt.KING_SCEPTER));
+    }
+    private boolean heldKnightBlade(MinecraftClient c) {
+        return c.player != null && (c.player.getMainHandStack().isOf(VoidHunt.KNIGHT_BLADE) || c.player.getOffHandStack().isOf(VoidHunt.KNIGHT_BLADE));
+    }
+
+    private void tickKingKit(MinecraftClient c) {
+        boolean held = heldScepter(c);
+        long win = c.getWindow().getHandle();
+        boolean ns = c.currentScreen == null;
+        boolean kd = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_SEMICOLON);
+        boolean au = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_LEFT_BRACKET);
+        boolean gu = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_RIGHT_BRACKET);
+        boolean tr = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_APOSTROPHE);
+        if (kd && !lastKd && kingTimer <= 0) startKing(c);
+        if (au && !lastAu && auraTimer <= 0) castAura(c);
+        if (gu && !lastGu && guardTimer <= 0) guardTimer = GUARD_TICKS;
+        if (tr && !lastTr) castTribute(c);
+        lastKd = kd; lastAu = au; lastGu = gu; lastTr = tr;
+        if (kingTimer > 0) { tickKingDomain(c); kingTimer--; if (kingTimer == 0) { knightId = null; kingHpPaid = false; } }
+        if (auraTimer > 0) { tickAura(c); auraTimer--; }
+        if (guardTimer > 0) { tickGuardian(c); guardTimer--; }
+    }
+
+    private UUID pickKnight(MinecraftClient c) {
+        double bd = 1e9; PlayerEntity best = null;
+        for (PlayerEntity pl : c.world.getPlayers()) {
+            if (pl == c.player) continue;
+            double d = pl.squaredDistanceTo(c.player);
+            if (d < bd && d < KING_RADIUS * KING_RADIUS) { bd = d; best = pl; }
+        }
+        if (best != null) { knightName = best.getName().getString(); return best.getUuid(); }
+        knightName = "—"; return null;
+    }
+    private void startKing(MinecraftClient c) {
+        kingCenter = c.player.getPos(); kingTimer = KING_TICKS; kingHpPaid = false;
+        knightId = pickKnight(c);
+        MinecraftServer server = c.getServer(); if (server == null) return;
+        UUID kingU = c.player.getUuid(); UUID knU = knightId;
+        server.execute(() -> {
+            var king = server.getPlayerManager().getPlayer(kingU);
+            if (king != null) king.setHealth(Math.max(1f, king.getMaxHealth() * 0.5f));  // 왕의 피는 반으로
+            if (knU != null) {
+                var kn = server.getPlayerManager().getPlayer(knU);
+                if (kn != null) {
+                    kn.addStatusEffect(new StatusEffectInstance(StatusEffects.STRENGTH, KING_TICKS, 2));
+                    kn.addStatusEffect(new StatusEffectInstance(StatusEffects.HEALTH_BOOST, KING_TICKS, 3));
+                    kn.addStatusEffect(new StatusEffectInstance(StatusEffects.RESISTANCE, KING_TICKS, 1));
+                    kn.addStatusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, KING_TICKS, 1));
+                    kn.getInventory().offerOrDrop(new ItemStack(VoidHunt.KNIGHT_BLADE));  // 기사의 검 하사
+                }
+            }
+        });
+    }
+
+    private void tickKingDomain(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world;
+        if (kingCenter == null) kingCenter = p.getPos();
+        Vec3d ctr = kingCenter; double R = KING_RADIUS; long t = p.age;
+        int elapsed = KING_TICKS - kingTimer; double form = Math.min(1.0, elapsed / 16.0); double spin = t * 0.02;
+        DustParticleEffect gold = new DustParticleEffect(0xF2C044, 1.5f);
+        DustParticleEffect roy = new DustParticleEffect(0xB07CF0, 1.4f);
+        int MER = 12, SEG = 8;
+        for (int m = 0; m < MER; m++) {
+            double th = m * (Math.PI * 2 / MER) + spin;
+            for (int s = 0; s <= SEG; s++) { double elev = (Math.PI / 2) * s / SEG * form; double hr = R * Math.cos(elev); w.addParticle((m % 2 == 0) ? gold : roy, ctr.x + Math.cos(th) * hr, ctr.y + R * Math.sin(elev), ctr.z + Math.sin(th) * hr, 0, 0, 0); }
+        }
+        for (int i = 0; i < 10; i++) { double a = Math.random() * Math.PI * 2, d2 = Math.random() * R * form; w.addParticle(ParticleTypes.END_ROD, ctr.x + Math.cos(a) * d2, ctr.y + 8 + Math.random() * 8, ctr.z + Math.sin(a) * d2, 0, -0.03, 0); }
+        if ((t & 1) == 0) for (int rr = 1; rr <= 3; rr++) { double rad = R * rr / 3.0 * form; for (int s = 0; s < 24; s++) { double a = s * (Math.PI * 2 / 24) + spin * 0.3; w.addParticle(gold, ctr.x + Math.cos(a) * rad, ctr.y + 0.05, ctr.z + Math.sin(a) * rad, 0, 0, 0); } }
+        if ((t % 40) == 0 && knightId != null && !renderingRemote) {
+            MinecraftServer server = c.getServer();
+            if (server != null) { UUID knU = knightId; server.execute(() -> { var kn = server.getPlayerManager().getPlayer(knU); if (kn != null) { kn.addStatusEffect(new StatusEffectInstance(StatusEffects.STRENGTH, 60, 2)); kn.addStatusEffect(new StatusEffectInstance(StatusEffects.HEALTH_BOOST, 60, 3)); kn.addStatusEffect(new StatusEffectInstance(StatusEffects.RESISTANCE, 60, 1)); } }); }
+        }
+        Box box = new Box(ctr.subtract(R, R, R), ctr.add(R, R, R));
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, box, e -> e.isAlive() && (e instanceof HostileEntity) && e.getPos().distanceTo(ctr) <= R + 1.0);
+        for (MobEntity m : mobs) { if ((t % 4) == 0) damage(c, m, KING_DMG); Vec3d mc2 = m.getBoundingBox().getCenter(); if ((t % 3) == 0) w.addParticle(gold, mc2.x, mc2.y, mc2.z, 0, 0, 0); }
+    }
+
+    // ---- 오라 (Aura — 1s stun) ----
+    private void castAura(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; auraTimer = AURA_TICKS;
+        List<LivingEntity> foes = w.getEntitiesByClass(LivingEntity.class, p.getBoundingBox().expand(7),
+            e -> e.isAlive() && e != p && ((e instanceof HostileEntity) || (e instanceof PlayerEntity)));
+        for (LivingEntity le : foes) { if (knightId != null && le.getUuid().equals(knightId)) continue; stunEntity(c, le); }
+    }
+    private void tickAura(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; Vec3d ctr = p.getPos();
+        int el = AURA_TICKS - auraTimer; double rad = el * 0.7;
+        DustParticleEffect gold = new DustParticleEffect(0xF2C044, 1.8f);
+        for (int i = 0; i < 40; i++) { double a = i * (Math.PI * 2 / 40); w.addParticle(gold, ctr.x + Math.cos(a) * rad, ctr.y + 0.3, ctr.z + Math.sin(a) * rad, 0, 0, 0); }
+    }
+    private void stunEntity(MinecraftClient c, LivingEntity target) {
+        if (renderingRemote) return;
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID id = target.getUuid();
+        server.execute(() -> {
+            ServerWorld sw = server.getWorld(c.world.getRegistryKey()); if (sw == null) return;
+            Entity se = sw.getEntity(id);
+            if (se instanceof LivingEntity le) { le.setVelocity(0, 0, 0); le.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 20, 250)); le.addStatusEffect(new StatusEffectInstance(StatusEffects.WEAKNESS, 20, 4)); le.addStatusEffect(new StatusEffectInstance(StatusEffects.JUMP_BOOST, 20, 128)); }
+        });
+    }
+
+    // ---- 왕국의 수호자 (Guardian hands) ----
+    private void tickGuardian(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; long t = p.age; Vec3d ctr = p.getPos();
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, p.getBoundingBox().expand(4.5), e -> e.isAlive() && (e instanceof HostileEntity));
+        for (MobEntity m : mobs) { knockback(c, m, m.getPos().subtract(ctr)); if ((t % 6) == 0) damage(c, m, 8f); }
+        for (int i = 0; i < 3; i++) w.addParticle(new DustParticleEffect(0xF2C044, 1.6f), ctr.x + (Math.random() - 0.5) * 3, ctr.y + 1 + Math.random() * 2, ctr.z + (Math.random() - 0.5) * 3, 0, 0, 0);
+    }
+    private void renderGuardianHands(MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc, Vec3d camPos, int light, Vec3d kingPos, float age) {
+        for (int s = 0; s < 2; s++) {
+            double side = (s == 0) ? 1 : -1; double a = age * 0.05;
+            double hx = kingPos.x + Math.cos(a) * 3.0 * side, hz = kingPos.z + Math.sin(a) * 3.0 * side, hy = kingPos.y + 3.5 + Math.sin(age * 0.06) * 0.4;
+            renderModel(HAND_STACK, ms, vcp, mc, camPos, light, hx, hy, hz, 3.2f, (float) (Math.toDegrees(a) + (s == 0 ? 0 : 180)), 0f, false);
+        }
+    }
+
+    // ---- 조공 (Tribute — buffs scale with your minerals) ----
+    private void castTribute(MinecraftClient c) {
+        ClientWorld w = c.world;
+        for (int i = 0; i < 30; i++) w.addParticle(new DustParticleEffect(0xF2C044, 1.6f), c.player.getX() + (Math.random() - 0.5) * 1.5, c.player.getY() + Math.random() * 2, c.player.getZ() + (Math.random() - 0.5) * 1.5, 0, 0.02, 0);
+        MinecraftServer server = c.getServer(); if (server == null) return; UUID kingU = c.player.getUuid();
+        server.execute(() -> {
+            var king = server.getPlayerManager().getPlayer(kingU); if (king == null) return;
+            int ore = 0;
+            for (int i = 0; i < king.getInventory().size(); i++) { ItemStack st = king.getInventory().getStack(i); if (!st.isEmpty() && isMineral(st)) ore += st.getCount(); }
+            int amp = Math.min(4, ore / 16); int dur = 600;
+            king.addStatusEffect(new StatusEffectInstance(StatusEffects.STRENGTH, dur, amp));
+            king.addStatusEffect(new StatusEffectInstance(StatusEffects.RESISTANCE, dur, Math.min(3, amp)));
+            king.addStatusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, dur, Math.min(2, amp)));
+            king.addStatusEffect(new StatusEffectInstance(StatusEffects.ABSORPTION, dur, Math.min(4, amp + 1)));
+        });
+    }
+    private boolean isMineral(ItemStack st) {
+        return st.isOf(Items.DIAMOND) || st.isOf(Items.EMERALD) || st.isOf(Items.GOLD_INGOT) || st.isOf(Items.IRON_INGOT)
+            || st.isOf(Items.NETHERITE_INGOT) || st.isOf(Items.COPPER_INGOT) || st.isOf(Items.LAPIS_LAZULI) || st.isOf(Items.REDSTONE)
+            || st.isOf(Items.COAL) || st.isOf(Items.AMETHYST_SHARD) || st.isOf(Items.QUARTZ)
+            || st.isOf(Items.RAW_IRON) || st.isOf(Items.RAW_GOLD) || st.isOf(Items.RAW_COPPER);
+    }
+
+    // ---- 기사의 대쉬 (Knight's Dash) ----
+    private void tickKnightKit(MinecraftClient c) {
+        boolean held = heldKnightBlade(c);
+        long win = c.getWindow().getHandle(); boolean ns = c.currentScreen == null;
+        boolean kn = held && ns && InputUtil.isKeyPressed(win, GLFW.GLFW_KEY_COMMA);
+        if (kn && !lastKn && knightDashTimer <= 0) knightDash(c);
+        lastKn = kn;
+        if (knightDashTimer > 0) { tickKnightDash(c); knightDashTimer--; }
+    }
+    private void knightDash(MinecraftClient c) {
+        knightDashTimer = KDASH_TICKS; playerEffect(c, StatusEffects.SPEED, 30, 3);
+        ClientPlayerEntity p = c.player; Vec3d look = p.getRotationVec(1.0f); Vec3d flat = new Vec3d(look.x, 0, look.z);
+        if (flat.lengthSquared() > 1e-4) { flat = flat.normalize(); p.setVelocity(flat.x * 1.6, p.getVelocity().y + 0.1, flat.z * 1.6); }
+    }
+    private void tickKnightDash(MinecraftClient c) {
+        ClientPlayerEntity p = c.player; ClientWorld w = c.world; Vec3d look = p.getRotationVec(1.0f); Vec3d flat = new Vec3d(look.x, 0, look.z);
+        if (flat.lengthSquared() > 1e-4) { flat = flat.normalize(); p.setVelocity(flat.x * 1.5, p.getVelocity().y, flat.z * 1.5); }
+        for (int i = 0; i < 3; i++) w.addParticle(new DustParticleEffect(0x64AAFF, 1.4f), p.getX() + (Math.random() - 0.5), p.getY() + 0.5 + Math.random(), p.getZ() + (Math.random() - 0.5), 0, 0, 0);
+        List<MobEntity> mobs = w.getEntitiesByClass(MobEntity.class, p.getBoundingBox().expand(2.4), e -> e.isAlive() && (e instanceof HostileEntity));
+        for (MobEntity m : mobs) damage(c, m, 10f);
+    }
+
+    private void renderKingWorld(MatrixStack ms, VertexConsumerProvider vcp, MinecraftClient mc, Vec3d camPos, int light) {
+        Vec3d ctr = kingCenter; float age = mc.player.age; int elapsed = KING_TICKS - kingTimer; float rise = Math.min(1f, elapsed / 18f);
+        float ts = 3.0f * (0.25f + 0.75f * rise); double tLift = (23.0 / 16.0) * ts;
+        renderModel(THRONE_STACK, ms, vcp, mc, camPos, light, ctr.x, ctr.y + tLift, ctr.z, ts, 0f, 0f, false);
+        int PN = 8;
+        for (int i = 0; i < PN; i++) {
+            double a = i * (Math.PI * 2 / PN) + 0.2; float sc = 2.2f * (0.3f + 0.7f * rise); double lift = (18.0 / 16.0) * sc;
+            double px = ctr.x + Math.cos(a) * KING_RADIUS * 0.85, pz = ctr.z + Math.sin(a) * KING_RADIUS * 0.85;
+            renderModel(RPILLAR_STACK, ms, vcp, mc, camPos, light, px, ctr.y + lift, pz, sc, (float) Math.toDegrees(a) + 90, 0f, false);
+        }
+    }
+
+    private void drawKingOverlay(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer;
+        int W = ctx.getScaledWindowWidth(), H = ctx.getScaledWindowHeight();
+        int elapsed = KING_TICKS - kingTimer; long t = c.player.age;
+        float dk = Math.min(1f, elapsed / 16f); if (kingTimer < 20) dk *= kingTimer / 20f;
+        ctx.fill(0, 0, W, H, ((int) (55 * dk) << 24) | 0x140E02);
+        int N = 60, maxIn = Math.min(W, H) * 3 / 5, band = Math.max(1, maxIn / N) + 1;
+        for (int i = 0; i < N; i++) {
+            int inset = i * maxIn / N; int a = (int) (190 * dk * Math.pow(1 - (double) i / N, 2.2)); if (a <= 2) continue;
+            int col = (a << 24) | 0x1C1404;
+            ctx.fill(inset, inset, W - inset, inset + band, col); ctx.fill(inset, H - inset - band, W - inset, H - inset, col);
+            ctx.fill(inset, inset, inset + band, H - inset, col); ctx.fill(W - inset - band, inset, W - inset, H - inset, col);
+        }
+        ctx.fill(0, 0, W, 22, 0xAA000000); ctx.fill(0, H - 22, W, H, 0xAA000000);
+        if (elapsed < 50) {
+            String jp = "王の世界"; boolean blink = (elapsed < 26) && ((t / 3) % 2 == 0);
+            ctx.getMatrices().push(); ctx.getMatrices().translate(W / 2f, H / 2f - 48f, 0f); ctx.getMatrices().scale(3.1f, 3.1f, 1f);
+            ctx.drawText(tr, Text.literal(jp), -tr.getWidth(jp) / 2, 0, blink ? 0xFFFFFFFF : GLD, true); ctx.getMatrices().pop();
+            String kr = "왕의 세계";
+            ctx.getMatrices().push(); ctx.getMatrices().translate(W / 2f, H / 2f - 16f, 0f); ctx.getMatrices().scale(1.9f, 1.9f, 1f);
+            ctx.drawText(tr, Text.literal(kr), -tr.getWidth(kr) / 2, 0, ROYP, true); ctx.getMatrices().pop();
+            String en = "K I N G ' S   R E A L M   ·   기사: " + knightName;
+            ctx.drawText(tr, Text.literal(en), W / 2 - tr.getWidth(en) / 2, H / 2 + 16, BON, true);
+        } else {
+            String b = "王 · 왕의 세계   (기사: " + knightName + ")";
+            ctx.getMatrices().push(); ctx.getMatrices().translate(W / 2f, 4f, 0f); ctx.getMatrices().scale(1.3f, 1.3f, 1f);
+            ctx.drawText(tr, Text.literal(b), -tr.getWidth(b) / 2, 0, GLD, true); ctx.getMatrices().pop();
+        }
+        int barW = 180, bx = W / 2 - barW / 2, by = H - 30;
+        ctx.fill(bx - 1, by - 1, bx + barW + 1, by + 4, 0xFF201804);
+        int fillW = (int) (barW * kingTimer / (double) KING_TICKS); ctx.fill(bx, by, bx + fillW, by + 3, GLD);
+        String sec = (kingTimer / 20 + 1) + "s"; ctx.drawText(tr, Text.literal(sec), bx + barW + 6, by - 3, GLD, true);
+    }
+    private void drawScepterPanel(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer; int H = ctx.getScaledWindowHeight(); int y0 = H - 120;
+        ctx.drawText(tr, Text.literal("KING SCEPTER · 왕의 지팡이"), 8, y0, GLD, true);
+        ctx.drawText(tr, Text.literal(kingTimer > 0 ? ">> 왕의 세계 " + (kingTimer / 20 + 1) + "s  기사:" + knightName : "= 왕의 세계 (;)"), 8, y0 + 12, kingTimer > 0 ? ROYP : DIM, true);
+        ctx.drawText(tr, Text.literal(auraTimer > 0 ? ">> 오라" : "= 오라 스턴 ([)"), 8, y0 + 22, auraTimer > 0 ? GLD : DIM, true);
+        ctx.drawText(tr, Text.literal(guardTimer > 0 ? ">> 수호자 " + (guardTimer / 20 + 1) + "s" : "= 왕국의 수호자 (])"), 8, y0 + 32, guardTimer > 0 ? GLD : DIM, true);
+        ctx.drawText(tr, Text.literal("조공 (')  — 광물로 버프"), 8, y0 + 42, DIM, true);
+    }
+    private void drawKnightPanel(DrawContext ctx, MinecraftClient c) {
+        TextRenderer tr = c.textRenderer; int H = ctx.getScaledWindowHeight();
+        ctx.drawText(tr, Text.literal("KNIGHT BLADE · 기사의 검"), 8, H - 60, 0xFF9AC0FF, true);
+        ctx.drawText(tr, Text.literal(knightDashTimer > 0 ? ">> 대쉬" : "= 대쉬 (,)"), 8, H - 48, knightDashTimer > 0 ? 0xFF9AC0FF : DIM, true);
+    }
+
     private void fireLaser(ClientWorld w, Vec3d from, Vec3d to) {
         int steps = (int) (from.distanceTo(to) * 3) + 4;
         for (int i = 0; i <= steps; i++) {
@@ -2259,6 +2514,10 @@ public class VoidHuntClient implements ClientModInitializer {
         // Highway overlay + pipe HUD whenever the neon pipe is held.
         if (roadTimer > 0 && heldPipe(c)) drawRoadOverlay(ctx, c);
         if (heldPipe(c)) drawPipePanel(ctx, c);
+        // King overlay + scepter/knight HUD
+        if (kingTimer > 0 && heldScepter(c)) drawKingOverlay(ctx, c);
+        if (heldScepter(c)) drawScepterPanel(ctx, c);
+        if (heldKnightBlade(c)) drawKnightPanel(ctx, c);
         if (!active(c)) return;
         ClientPlayerEntity p = c.player;
         TextRenderer tr = c.textRenderer;

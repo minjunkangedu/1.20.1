@@ -106,6 +106,16 @@ public class VoidHunt implements ModInitializer {
     public static final RegistryKey<Item> NGATE_KEY = ck("neon_gate");
     public static final Item NEON_GATE = new Item(new Item.Settings().registryKey(NGATE_KEY).maxCount(1).rarity(Rarity.EPIC));
 
+    // ===== KING'S WORLD set — the Scepter, the Knight's Blade, the throne =====
+    public static final RegistryKey<Item> SCEPTER_KEY = ck("king_scepter");
+    public static final Item KING_SCEPTER = new Item(new Item.Settings().registryKey(SCEPTER_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> KBLADE_KEY = ck("knight_blade");
+    public static final Item KNIGHT_BLADE = new Item(new Item.Settings().registryKey(KBLADE_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> THRONE_KEY = ck("king_throne");
+    public static final Item KING_THRONE = new Item(new Item.Settings().registryKey(THRONE_KEY).maxCount(1).rarity(Rarity.EPIC));
+    public static final RegistryKey<Item> RPILLAR_KEY = ck("royal_pillar");
+    public static final Item ROYAL_PILLAR = new Item(new Item.Settings().registryKey(RPILLAR_KEY).maxCount(1).rarity(Rarity.EPIC));
+
     @Override
     public void onInitialize() {
         Registry.register(Registries.ITEM, SHADES_KEY, VOID_SHADES);
@@ -133,6 +143,10 @@ public class VoidHunt implements ModInitializer {
         Registry.register(Registries.ITEM, BIKE_KEY, GHOST_BIKE);
         Registry.register(Registries.ITEM, LIGHT_KEY, STREET_LIGHT);
         Registry.register(Registries.ITEM, NGATE_KEY, NEON_GATE);
+        Registry.register(Registries.ITEM, SCEPTER_KEY, KING_SCEPTER);
+        Registry.register(Registries.ITEM, KBLADE_KEY, KNIGHT_BLADE);
+        Registry.register(Registries.ITEM, THRONE_KEY, KING_THRONE);
+        Registry.register(Registries.ITEM, RPILLAR_KEY, ROYAL_PILLAR);
         // multiplayer effect-sharing networking
         VoidNet.registerCommon();
         VoidNet.registerServer();
@@ -141,6 +155,7 @@ public class VoidHunt implements ModInitializer {
             .register(entries -> {
                 entries.add(VOID_SHADES); entries.add(VOID_DRONE); entries.add(VOID_SATELLITE);
                 entries.add(CROW_FAN); entries.add(DUEL_SWORD); entries.add(SEA_TRIDENT); entries.add(NEON_PIPE);
+                entries.add(KING_SCEPTER); entries.add(KNIGHT_BLADE);
             });
     }
 }
